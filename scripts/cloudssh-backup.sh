@@ -18,6 +18,12 @@ MINIMUM_STOP_TIMEOUT=60
 HELPER_IMAGE="alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce"
 BACKUP_UID="$(id -u)"
 BACKUP_GID="$(id -g)"
+BACKUP_RETENTION_COUNT="${CLOUDSSH_BACKUP_RETENTION_COUNT:-5}"
+MAX_BACKUP_RETENTION_COUNT=30
+BACKUP_PUBLISHED=0
+MANIFEST_PUBLISHED=0
+CHECKSUM_PUBLISHED=0
+ARCHIVE_PUBLISHED=0
 CLOUDSSH_CONTAINER_ID=""
 GUACD_CONTAINER_ID=""
 
@@ -32,6 +38,60 @@ compose() {
     docker compose -f "$COMPOSE_FILE" "$@"
   fi
 }
+
+validate_backup_retention_count() {
+  case "$BACKUP_RETENTION_COUNT" in
+    [1-9] | [12][0-9] | 30) ;;
+    *)
+      fail "CLOUDSSH_BACKUP_RETENTION_COUNT 必须是 1 到 ${MAX_BACKUP_RETENTION_COUNT} 的整数。"
+      ;;
+  esac
+}
+
+prune_backup_sets() {
+  keep_count="$1"
+  find "$OUTPUT_DIR" -maxdepth 1 -type f -name 'cloudssh-state-*.tar.gz' -print |
+    sort -r |
+    (
+      retained=0
+      while IFS= read -r archive_path; do
+        archive_name="${archive_path##*/}"
+        archive_timestamp="${archive_name#cloudssh-state-}"
+        archive_timestamp="${archive_timestamp%.tar.gz}"
+        case "$archive_timestamp" in
+          ????????T??????Z) ;;
+          *) continue ;;
+        esac
+        [ -s "${archive_path}.manifest" ] &&
+          [ -s "${archive_path}.sha256" ] || continue
+        retained=$((retained + 1))
+        [ "$retained" -le "$keep_count" ] && continue
+        rm -f \
+          "$archive_path" \
+          "${archive_path}.manifest" \
+          "${archive_path}.sha256"
+        echo "已按保留策略删除旧备份：$archive_path"
+      done
+    ) || fail "无法清理超出保留上限的旧备份。"
+}
+
+cleanup_incomplete_backup() {
+  rm -f \
+    "$OUTPUT_DIR/$PARTIAL_ARCHIVE" \
+    "$OUTPUT_DIR/$PARTIAL_MANIFEST" \
+    "$OUTPUT_DIR/$PARTIAL_CHECKSUM"
+  if [ "$MANIFEST_PUBLISHED" -eq 1 ]; then
+    rm -f "$OUTPUT_DIR/$MANIFEST"
+  fi
+  if [ "$CHECKSUM_PUBLISHED" -eq 1 ]; then
+    rm -f "$OUTPUT_DIR/$CHECKSUM_FILE"
+  fi
+  if [ "$ARCHIVE_PUBLISHED" -eq 1 ]; then
+    rm -f "$OUTPUT_DIR/$ARCHIVE"
+  fi
+}
+
+validate_backup_retention_count
 
 
 resolve_volume_mount() {
@@ -162,7 +222,7 @@ for output_name in \
   [ ! -e "$OUTPUT_DIR/$output_name" ] ||
     fail "输出文件已存在，拒绝覆盖：$OUTPUT_DIR/$output_name"
 done
-
+trap cleanup_incomplete_backup 0
 docker run --rm --network none \
   -e "BACKUP_UID=${BACKUP_UID}" \
   -e "BACKUP_GID=${BACKUP_GID}" \
@@ -330,10 +390,17 @@ chmod 600 \
 
 # 先发布校验材料，归档名最后原子出现；消费者不会看到半套可用备份。
 mv "$OUTPUT_DIR/$PARTIAL_MANIFEST" "$OUTPUT_DIR/$MANIFEST"
+MANIFEST_PUBLISHED=1
 mv "$OUTPUT_DIR/$PARTIAL_CHECKSUM" "$OUTPUT_DIR/$CHECKSUM_FILE"
+CHECKSUM_PUBLISHED=1
 mv "$OUTPUT_DIR/$PARTIAL_ARCHIVE" "$OUTPUT_DIR/$ARCHIVE"
+ARCHIVE_PUBLISHED=1
+BACKUP_PUBLISHED=1
+prune_backup_sets "$BACKUP_RETENTION_COUNT"
+trap - 0
 
 echo "备份已创建：$OUTPUT_DIR/$ARCHIVE"
 echo "备份清单：$OUTPUT_DIR/$MANIFEST"
 echo "已核对真实挂载：数据卷 ${DATA_VOLUME}，录像卷 ${GUACD_RECORDINGS_VOLUME}。"
 echo "根密钥 Secret 未包含在备份中，必须单独离线保管。"
+echo "备份保留上限：最新 ${BACKUP_RETENTION_COUNT} 份（可通过 CLOUDSSH_BACKUP_RETENTION_COUNT 配置，最高 ${MAX_BACKUP_RETENTION_COUNT} 份）。"
