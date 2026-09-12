@@ -43,6 +43,7 @@ export interface GuacamoleConnectionConfig {
 export interface GuacamoleDisplayHandle {
   disconnect: () => void;
   isConnected: () => boolean;
+  focus: () => void;
   sendKey: (keysym: number, pressed: boolean) => void;
   sendMouse: (x: number, y: number, buttonMask: number) => void;
   setClipboard: (data: string) => void;
@@ -74,6 +75,8 @@ export const GuacamoleDisplay = forwardRef<
   const displayElementRef = useRef<HTMLElement | null>(null);
   const clientRef = useRef<Guacamole.Client | null>(null);
   const keyboardRef = useRef<Guacamole.Keyboard | null>(null);
+  const touchModeRef = useRef<GuacamoleTouchMode | null>(touchMode ?? null);
+  touchModeRef.current = touchMode ?? null;
   const scaleRef = useRef<number>(1);
   const resizeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const hasKeyboardFocusRef = useRef(false);
@@ -117,38 +120,6 @@ export const GuacamoleDisplay = forwardRef<
       console.warn("Failed to disconnect Guacamole client", error);
     }
   }, []);
-
-  useImperativeHandle(ref, () => ({
-    disconnect: disconnectClient,
-    isConnected: () => isReady && !hasError,
-    sendKey: (keysym: number, pressed: boolean) => {
-      if (clientRef.current) {
-        clientRef.current.sendKeyEvent(pressed ? 1 : 0, keysym);
-      }
-    },
-    sendMouse: (x: number, y: number, buttonMask: number) => {
-      if (clientRef.current) {
-        lastMousePositionRef.current = { x, y, hasPosition: true };
-        clientRef.current.sendMouseState(
-          new Guacamole.Mouse.State({
-            x,
-            y,
-            left: !!(buttonMask & 1),
-            middle: !!(buttonMask & 2),
-            right: !!(buttonMask & 4),
-          }),
-        );
-      }
-    },
-    setClipboard: (data: string) => {
-      if (clientRef.current) {
-        const stream = clientRef.current.createClipboardStream("text/plain");
-        const writer = new Guacamole.StringWriter(stream);
-        writer.sendText(data);
-        writer.sendEnd();
-      }
-    },
-  }));
 
   const getWebSocketConnection = useCallback(
     async (
@@ -292,6 +263,46 @@ export const GuacamoleDisplay = forwardRef<
       clientRef.current.sendKeyEvent(0, keysym);
     };
   }, [isVisible]);
+
+  useImperativeHandle(ref, () => ({
+    disconnect: disconnectClient,
+    isConnected: () => isReady && !hasError,
+    focus: () => {
+      const displayElement = displayElementRef.current;
+      if (!displayElement) return;
+      windowFocusedRef.current = document.hasFocus();
+      hasKeyboardFocusRef.current = true;
+      displayElement.focus({ preventScroll: true });
+      refreshKeyboardHandlers();
+    },
+    sendKey: (keysym: number, pressed: boolean) => {
+      if (clientRef.current) {
+        clientRef.current.sendKeyEvent(pressed ? 1 : 0, keysym);
+      }
+    },
+    sendMouse: (x: number, y: number, buttonMask: number) => {
+      if (clientRef.current) {
+        lastMousePositionRef.current = { x, y, hasPosition: true };
+        clientRef.current.sendMouseState(
+          new Guacamole.Mouse.State({
+            x,
+            y,
+            left: !!(buttonMask & 1),
+            middle: !!(buttonMask & 2),
+            right: !!(buttonMask & 4),
+          }),
+        );
+      }
+    },
+    setClipboard: (data: string) => {
+      if (clientRef.current) {
+        const stream = clientRef.current.createClipboardStream("text/plain");
+        const writer = new Guacamole.StringWriter(stream);
+        writer.sendText(data);
+        writer.sendEnd();
+      }
+    },
+  }));
 
   const rescaleDisplay = useCallback((immediate: boolean = false) => {
     if (!clientRef.current || !containerRef.current) return;
@@ -474,13 +485,15 @@ export const GuacamoleDisplay = forwardRef<
     };
     mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = sendMouseState;
 
-    if (touchMode === "touchscreen") {
-      const touchscreen = new Guacamole.Mouse.Touchscreen(displayElement);
-      touchscreen.onEach(["mousedown", "mousemove", "mouseup"], sendMouseEvent);
-    } else if (touchMode === "touchpad") {
-      const touchpad = new Guacamole.Mouse.Touchpad(displayElement);
-      touchpad.onEach(["mousedown", "mousemove", "mouseup"], sendMouseEvent);
-    }
+    const touchscreen = new Guacamole.Mouse.Touchscreen(displayElement);
+    touchscreen.onEach(["mousedown", "mousemove", "mouseup"], (event) => {
+      if (touchModeRef.current === "touchscreen") sendMouseEvent(event);
+    });
+
+    const touchpad = new Guacamole.Mouse.Touchpad(displayElement);
+    touchpad.onEach(["mousedown", "mousemove", "mouseup"], (event) => {
+      if (touchModeRef.current === "touchpad") sendMouseEvent(event);
+    });
 
     const keyboard = new Guacamole.Keyboard(displayElement);
     keyboardRef.current = keyboard;
@@ -632,7 +645,6 @@ export const GuacamoleDisplay = forwardRef<
     connectionConfig.protocol,
     connectionConfig.type,
     connectionConfig.dpi,
-    touchMode,
     t,
   ]);
 
