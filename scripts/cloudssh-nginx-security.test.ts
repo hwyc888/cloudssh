@@ -94,6 +94,21 @@ describe.each(configurations)("%s Agent 入口安全约束", (filePath) => {
       'add_header Cache-Control "private, no-store" always;',
     );
   });
+
+  it("为 Guacamole 保留外部主机和端口上下文", () => {
+    const location = extractLocation(
+      configuration,
+      "location ~ ^/guacamole(/.*)?$ {",
+    );
+    expect(location).not.toBe("");
+    expect(location).toContain("proxy_set_header Host $http_host;");
+    expect(location).toContain(
+      "proxy_set_header X-Forwarded-Host $proxy_x_forwarded_host;",
+    );
+    expect(location).toContain(
+      "proxy_set_header X-Forwarded-Port $proxy_x_forwarded_port;",
+    );
+  });
 });
 
 describe("可信代理运行时配置", () => {
@@ -122,6 +137,9 @@ describe("可信代理运行时配置", () => {
     );
     expect(compose).toContain(
       'CLOUDSSH_TRUSTED_PROXY_CIDR: "${CLOUDSSH_TRUSTED_PROXY_CIDR:-}"',
+    );
+    expect(compose).toContain(
+      'CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:-}"',
     );
   });
 });
