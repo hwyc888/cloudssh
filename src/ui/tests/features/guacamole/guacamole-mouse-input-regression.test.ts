@@ -44,4 +44,34 @@ describe("Guacamole mouse input regression guards", () => {
     expect(windowBlurHandler).toContain("releaseMouseButtons();");
     expect(displayBlurHandler).toContain("releaseMouseButtons();");
   });
+
+  it("restores RDP input focus after leaving and returning to a fullscreen browser window", () => {
+    const windowFocusHandler = displaySource.slice(
+      displaySource.indexOf("const handleWindowFocus"),
+      displaySource.indexOf("const handleWindowBlur"),
+    );
+    const windowBlurHandler = displaySource.slice(
+      displaySource.indexOf("const handleWindowBlur"),
+      displaySource.indexOf("const handleVisibilityChange"),
+    );
+    const displayBlurHandler = displaySource.slice(
+      displaySource.indexOf("const handleDisplayBlur"),
+      displaySource.indexOf('displayElement.addEventListener("focus"'),
+    );
+
+    expect(displaySource).toContain("restoreInputFocusOnWindowFocusRef");
+    expect(windowFocusHandler).toContain("restoreDisplayFocus();");
+    expect(windowBlurHandler).toContain("rememberDisplayFocus();");
+    expect(displayBlurHandler).toContain("!document.hasFocus()");
+    expect(displaySource).toContain(
+      "restoreInputFocusOnWindowFocusRef.current ||",
+    );
+    expect(displaySource).toContain("if (!windowFocused)");
+    expect(displaySource).toContain(
+      "restoreInputFocusOnWindowFocusRef.current = isVisibleRef.current;",
+    );
+    expect(displaySource).toContain(
+      "displayElement.focus({ preventScroll: true });",
+    );
+  });
 });

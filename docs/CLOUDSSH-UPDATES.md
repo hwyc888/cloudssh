@@ -76,7 +76,7 @@ Docker Compose 默认把管理后台的版本检查和更新仓库指向 `hwyc88
 {
   "schemaVersion": 3,
   "channel": "stable",
-  "version": "2.6.0-cloudssh.56",
+  "version": "2.6.0-cloudssh.57",
   "image": "ghcr.io/hwyc888/cloudssh",
   "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "revision": "0123456789abcdef0123456789abcdef01234567",
@@ -118,7 +118,7 @@ cd /opt/cloudssh
 sh scripts/cloudssh-host-image-update.sh
 
 # 固定升级到指定正式版本
-sh scripts/cloudssh-host-image-update.sh 2.6.0-cloudssh.56
+sh scripts/cloudssh-host-image-update.sh 2.6.0-cloudssh.57
 ```
 
 脚本需要 `curl`、`docker`、`gzip` 与 `sha256sum`（或 `shasum`），并且要求当前镜像仍在本机，
