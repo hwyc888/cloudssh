@@ -295,7 +295,9 @@ const GuacamoleAppInner = React.forwardRef<
         document.fullscreenElement === fullscreenContainerRef.current;
       setIsNativeFullscreen(isFullscreen);
       if (!isFullscreen) unlockKeyboard();
-      requestAnimationFrame(() => displayRef.current?.focus());
+      if (isVisible) {
+        requestAnimationFrame(() => displayRef.current?.focus());
+      }
     };
 
     document.addEventListener("fullscreenchange", handleFullscreenChange);
@@ -303,7 +305,7 @@ const GuacamoleAppInner = React.forwardRef<
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
       unlockKeyboard();
     };
-  }, [unlockKeyboard]);
+  }, [isVisible, unlockKeyboard]);
 
   useEffect(() => {
     if (!tabId) return;

@@ -40,6 +40,19 @@ describe("Guacamole native fullscreen regression guards", () => {
     expect(toolbarSource).toContain('t("guacamole.toolbar.exitFullscreen")');
   });
 
+  it("restores input focus only for the visible RDP after any fullscreen transition", () => {
+    const fullscreenHandler = appSource.slice(
+      appSource.indexOf("const handleFullscreenChange"),
+      appSource.indexOf('document.addEventListener("fullscreenchange"'),
+    );
+
+    expect(fullscreenHandler).toContain("if (isVisible)");
+    expect(fullscreenHandler).toContain("displayRef.current?.focus()");
+    expect(displaySource).toContain("focus: () => {");
+    expect(displaySource).toContain("hasKeyboardFocusRef.current = true;");
+    expect(displaySource).toContain("refreshKeyboardHandlers();");
+  });
+
   it("keeps remote resolution synchronized when the fullscreen container resizes", () => {
     expect(displaySource).toContain(
       "const resizeObserver = new ResizeObserver",
