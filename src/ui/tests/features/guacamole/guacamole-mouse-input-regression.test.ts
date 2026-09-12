@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const source = readFileSync(
-  new URL("../../../features/guacamole/GuacamoleDisplay.tsx", import.meta.url),
+  join(process.cwd(), "src/ui/features/guacamole/GuacamoleDisplay.tsx"),
   "utf8",
 );
 
