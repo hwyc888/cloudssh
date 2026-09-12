@@ -20,7 +20,7 @@ env:
 
 jobs:
   build:
-    if: ${{ github.repository == 'moeacgx/cloudssh' && github.ref == 'refs/heads/main' }}
+    if: ${{ github.repository == 'hwyc888/cloudssh' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
