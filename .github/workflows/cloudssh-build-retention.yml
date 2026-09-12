@@ -3,6 +3,7 @@ name: CloudSSH 构建记录清理
 on:
   workflow_run:
     workflows:
+      - PR Check
       - CloudSSH 快速镜像构建
       - CloudSSH 正式发版
       - CloudSSH 发布镜像校验
