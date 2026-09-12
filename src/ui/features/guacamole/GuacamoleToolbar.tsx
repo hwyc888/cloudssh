@@ -15,6 +15,8 @@ import {
   ChevronsLeftRight,
   Touchpad,
   MousePointer,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
 import {
   Tooltip,
@@ -34,6 +36,8 @@ interface GuacamoleToolbarProps {
   protocol: "rdp" | "vnc" | "telnet";
   touchMode?: GuacamoleTouchMode | null;
   onTouchModeChange?: (mode: GuacamoleTouchMode) => void;
+  isFullscreen: boolean;
+  onToggleFullscreen: () => void;
 }
 
 const MODIFIER_KEYSYMS = {
@@ -116,6 +120,8 @@ export const GuacamoleToolbar: React.FC<GuacamoleToolbarProps> = ({
   protocol,
   touchMode,
   onTouchModeChange,
+  isFullscreen,
+  onToggleFullscreen,
 }) => {
   const { t } = useTranslation();
   const [position, setPosition] = useState({ x: 0, y: 12 });
@@ -326,6 +332,26 @@ export const GuacamoleToolbar: React.FC<GuacamoleToolbarProps> = ({
                       : t("guacamole.toolbar.switchToTouch")}
                   </TooltipContent>
                 </Tooltip>
+              </>
+            )}
+
+            {protocol === "rdp" && (
+              <>
+                <div className={SEP} />
+                <TipIconBtn
+                  tooltip={
+                    isFullscreen
+                      ? t("guacamole.toolbar.exitFullscreen")
+                      : t("guacamole.toolbar.enterFullscreen")
+                  }
+                  onClick={onToggleFullscreen}
+                >
+                  {isFullscreen ? (
+                    <Minimize2 className="size-3.5" />
+                  ) : (
+                    <Maximize2 className="size-3.5" />
+                  )}
+                </TipIconBtn>
               </>
             )}
 

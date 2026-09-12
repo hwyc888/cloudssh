@@ -1922,6 +1922,8 @@
     "credentialPromptDescription": "此主机设置为在连接时提示输入凭据。这些凭据仅用于当前会话，不会被保存。",
     "connect": "连接",
     "ctrlAltDel": "Ctrl+Alt+Del",
+    "fullscreenUnsupported": "当前浏览器不支持全屏模式",
+    "fullscreenFailed": "无法进入 RDP 真全屏模式",
     "toolbar": {
       "ctrlAltDel": "Ctrl+Alt+Del",
       "winL": "Win+L (锁定屏幕)",
@@ -1947,6 +1949,8 @@
       "collapse": "折叠工具栏",
       "expand": "展开工具栏",
       "dragHandle": "拖动以重新定位",
+      "enterFullscreen": "进入 RDP 真全屏",
+      "exitFullscreen": "退出 RDP 真全屏",
       "switchToTrackpad": "切换到触控板模式（拖动移动光标，点击点击）",
       "switchToTouch": "切换到触摸模式（直接点击你想点击的地方）"
     }
