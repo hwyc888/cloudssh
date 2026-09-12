@@ -463,7 +463,7 @@ const GuacamoleAppInner = React.forwardRef<
         </div>
       )}
       <GuacamoleDisplay
-        key={`${token}-${touchMode}`}
+        key={token}
         ref={displayRef}
         connectionConfig={{
           token,

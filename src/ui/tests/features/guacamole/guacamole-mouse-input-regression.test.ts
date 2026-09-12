@@ -2,31 +2,43 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const source = readFileSync(
+const displaySource = readFileSync(
   join(process.cwd(), "src/ui/features/guacamole/GuacamoleDisplay.tsx"),
+  "utf8",
+);
+const appSource = readFileSync(
+  join(process.cwd(), "src/ui/features/guacamole/GuacamoleApp.tsx"),
   "utf8",
 );
 
 describe("Guacamole mouse input regression guards", () => {
   it("registers the physical mouse independently of touch mode", () => {
-    const mouseRegistration = source.indexOf(
+    expect(displaySource).toContain(
       "const mouse = new Guacamole.Mouse(displayElement);",
     );
-    const touchModeBranch = source.indexOf('if (touchMode === "touchscreen")');
+    expect(displaySource).toContain(
+      "const touchscreen = new Guacamole.Mouse.Touchscreen(displayElement);",
+    );
+    expect(displaySource).toContain(
+      "const touchpad = new Guacamole.Mouse.Touchpad(displayElement);",
+    );
+  });
 
-    expect(mouseRegistration).toBeGreaterThan(-1);
-    expect(touchModeBranch).toBeGreaterThan(-1);
-    expect(mouseRegistration).toBeLessThan(touchModeBranch);
+  it("switches touch mouse mode without remounting or reconnecting RDP", () => {
+    expect(appSource).toContain("key={token}");
+    expect(appSource).not.toContain("key={`${token}-${touchMode}`}");
+    expect(displaySource).toContain('touchModeRef.current === "touchscreen"');
+    expect(displaySource).toContain('touchModeRef.current === "touchpad"');
   });
 
   it("releases remote mouse buttons when focus is lost", () => {
-    const windowBlurHandler = source.slice(
-      source.indexOf("const handleWindowBlur"),
-      source.indexOf("const handleVisibilityChange"),
+    const windowBlurHandler = displaySource.slice(
+      displaySource.indexOf("const handleWindowBlur"),
+      displaySource.indexOf("const handleVisibilityChange"),
     );
-    const displayBlurHandler = source.slice(
-      source.indexOf("const handleDisplayBlur"),
-      source.indexOf('displayElement.addEventListener("focus"'),
+    const displayBlurHandler = displaySource.slice(
+      displaySource.indexOf("const handleDisplayBlur"),
+      displaySource.indexOf('displayElement.addEventListener("focus"'),
     );
 
     expect(windowBlurHandler).toContain("releaseMouseButtons();");

@@ -75,6 +75,8 @@ export const GuacamoleDisplay = forwardRef<
   const displayElementRef = useRef<HTMLElement | null>(null);
   const clientRef = useRef<Guacamole.Client | null>(null);
   const keyboardRef = useRef<Guacamole.Keyboard | null>(null);
+  const touchModeRef = useRef<GuacamoleTouchMode | null>(touchMode ?? null);
+  touchModeRef.current = touchMode ?? null;
   const scaleRef = useRef<number>(1);
   const resizeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const hasKeyboardFocusRef = useRef(false);
@@ -483,13 +485,15 @@ export const GuacamoleDisplay = forwardRef<
     };
     mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = sendMouseState;
 
-    if (touchMode === "touchscreen") {
-      const touchscreen = new Guacamole.Mouse.Touchscreen(displayElement);
-      touchscreen.onEach(["mousedown", "mousemove", "mouseup"], sendMouseEvent);
-    } else if (touchMode === "touchpad") {
-      const touchpad = new Guacamole.Mouse.Touchpad(displayElement);
-      touchpad.onEach(["mousedown", "mousemove", "mouseup"], sendMouseEvent);
-    }
+    const touchscreen = new Guacamole.Mouse.Touchscreen(displayElement);
+    touchscreen.onEach(["mousedown", "mousemove", "mouseup"], (event) => {
+      if (touchModeRef.current === "touchscreen") sendMouseEvent(event);
+    });
+
+    const touchpad = new Guacamole.Mouse.Touchpad(displayElement);
+    touchpad.onEach(["mousedown", "mousemove", "mouseup"], (event) => {
+      if (touchModeRef.current === "touchpad") sendMouseEvent(event);
+    });
 
     const keyboard = new Guacamole.Keyboard(displayElement);
     keyboardRef.current = keyboard;
@@ -641,7 +645,6 @@ export const GuacamoleDisplay = forwardRef<
     connectionConfig.protocol,
     connectionConfig.type,
     connectionConfig.dpi,
-    touchMode,
     t,
   ]);
 
