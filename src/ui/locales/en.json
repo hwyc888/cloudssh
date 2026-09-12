@@ -1922,6 +1922,8 @@
     "credentialPromptDescription": "This host is set to prompt for credentials on connect. They are used for this session only and are not saved.",
     "connect": "Connect",
     "ctrlAltDel": "Ctrl+Alt+Del",
+    "fullscreenUnsupported": "Fullscreen is not supported by this browser",
+    "fullscreenFailed": "Unable to enter RDP fullscreen mode",
     "toolbar": {
       "ctrlAltDel": "Ctrl+Alt+Del",
       "winL": "Win+L (Lock Screen)",
@@ -1947,6 +1949,8 @@
       "collapse": "Collapse toolbar",
       "expand": "Expand toolbar",
       "dragHandle": "Drag to reposition",
+      "enterFullscreen": "Enter true RDP fullscreen",
+      "exitFullscreen": "Exit true RDP fullscreen",
       "switchToTrackpad": "Switch to trackpad mode (drag to move cursor, tap to click)",
       "switchToTouch": "Switch to touch mode (tap directly where you want to click)"
     }

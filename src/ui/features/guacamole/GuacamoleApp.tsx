@@ -34,6 +34,7 @@ import {
 import { SimpleLoader } from "@/lib/SimpleLoader.tsx";
 import { ShareSessionModal } from "@/features/session-sharing/ShareSessionModal.tsx";
 import type { SSHHost } from "@/types";
+import { toast } from "sonner";
 
 interface GuacamoleAppProps {
   hostId?: string;
@@ -123,6 +124,13 @@ interface GuacamoleAppInnerProps {
   isVisible: boolean;
 }
 
+type KeyboardLockNavigator = Navigator & {
+  keyboard?: {
+    lock?: (keyCodes?: string[]) => Promise<void>;
+    unlock?: () => void;
+  };
+};
+
 const GuacamoleAppInner = React.forwardRef<
   GuacamoleAppHandle,
   GuacamoleAppInnerProps
@@ -146,6 +154,8 @@ const GuacamoleAppInner = React.forwardRef<
       : null,
   );
   const displayRef = useRef<GuacamoleDisplayHandle>(null);
+  const fullscreenContainerRef = useRef<HTMLDivElement>(null);
+  const [isNativeFullscreen, setIsNativeFullscreen] = useState(false);
 
   const resolvedProtocolForConnect = (protocol ??
     hostConfig.connectionType ??
@@ -241,6 +251,59 @@ const GuacamoleAppInner = React.forwardRef<
     }
     setRetryCount((c) => c + 1);
   }, [needsCredentialPrompt]);
+
+  const unlockKeyboard = useCallback(() => {
+    (navigator as KeyboardLockNavigator).keyboard?.unlock?.();
+  }, []);
+
+  const toggleNativeFullscreen = useCallback(async () => {
+    const container = fullscreenContainerRef.current;
+    if (!container) return;
+
+    if (!document.fullscreenEnabled) {
+      toast.error(t("guacamole.fullscreenUnsupported"));
+      return;
+    }
+
+    try {
+      if (document.fullscreenElement === container) {
+        await document.exitFullscreen();
+        return;
+      }
+
+      await container.requestFullscreen({ navigationUI: "hide" });
+
+      try {
+        await (navigator as KeyboardLockNavigator).keyboard?.lock?.([
+          "AltLeft",
+          "AltRight",
+          "MetaLeft",
+          "MetaRight",
+          "Tab",
+        ]);
+      } catch {
+        // Keyboard Lock is optional and not supported by every browser.
+      }
+    } catch {
+      toast.error(t("guacamole.fullscreenFailed"));
+    }
+  }, [t]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isFullscreen =
+        document.fullscreenElement === fullscreenContainerRef.current;
+      setIsNativeFullscreen(isFullscreen);
+      if (!isFullscreen) unlockKeyboard();
+      requestAnimationFrame(() => displayRef.current?.focus());
+    };
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      unlockKeyboard();
+    };
+  }, [unlockKeyboard]);
 
   useEffect(() => {
     if (!tabId) return;
@@ -365,7 +428,11 @@ const GuacamoleAppInner = React.forwardRef<
   const configuredDpi = Number(hostConfig.guacamoleConfig?.dpi);
 
   return (
-    <div className="relative w-full h-full">
+    <div
+      ref={fullscreenContainerRef}
+      className="relative w-full h-full"
+      style={{ backgroundColor: "var(--bg-base)" }}
+    >
       {connectionError && (
         <div
           className="absolute inset-0 flex flex-col items-center justify-center gap-4 z-50"
@@ -414,6 +481,8 @@ const GuacamoleAppInner = React.forwardRef<
         protocol={resolvedProtocol}
         touchMode={touchMode}
         onTouchModeChange={setTouchMode}
+        isFullscreen={isNativeFullscreen}
+        onToggleFullscreen={toggleNativeFullscreen}
       />
       {shareModalOpen && guacamoleConnectionId && (
         <ShareSessionModal
