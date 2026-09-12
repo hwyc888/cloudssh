@@ -75,11 +75,14 @@ export const GuacamoleDisplay = forwardRef<
   const displayElementRef = useRef<HTMLElement | null>(null);
   const clientRef = useRef<Guacamole.Client | null>(null);
   const keyboardRef = useRef<Guacamole.Keyboard | null>(null);
+  const isVisibleRef = useRef(isVisible);
+  isVisibleRef.current = isVisible;
   const touchModeRef = useRef<GuacamoleTouchMode | null>(touchMode ?? null);
   touchModeRef.current = touchMode ?? null;
   const scaleRef = useRef<number>(1);
   const resizeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const hasKeyboardFocusRef = useRef(false);
+  const restoreInputFocusOnWindowFocusRef = useRef(false);
   const windowFocusedRef = useRef(
     typeof document === "undefined" ? true : document.hasFocus(),
   );
@@ -270,7 +273,15 @@ export const GuacamoleDisplay = forwardRef<
     focus: () => {
       const displayElement = displayElementRef.current;
       if (!displayElement) return;
-      windowFocusedRef.current = document.hasFocus();
+
+      const windowFocused = document.hasFocus();
+      windowFocusedRef.current = windowFocused;
+      if (!windowFocused) {
+        restoreInputFocusOnWindowFocusRef.current = isVisibleRef.current;
+        return;
+      }
+
+      restoreInputFocusOnWindowFocusRef.current = false;
       hasKeyboardFocusRef.current = true;
       displayElement.focus({ preventScroll: true });
       refreshKeyboardHandlers();
@@ -509,6 +520,8 @@ export const GuacamoleDisplay = forwardRef<
     };
 
     const handleDisplayBlur = () => {
+      restoreInputFocusOnWindowFocusRef.current =
+        isVisibleRef.current && !document.hasFocus();
       hasKeyboardFocusRef.current = false;
       releaseMouseButtons();
       refreshKeyboardHandlers();
@@ -659,6 +672,7 @@ export const GuacamoleDisplay = forwardRef<
 
   useEffect(() => {
     if (!isVisible) {
+      restoreInputFocusOnWindowFocusRef.current = false;
       hasKeyboardFocusRef.current = false;
       releaseMouseButtons();
     }
@@ -667,12 +681,34 @@ export const GuacamoleDisplay = forwardRef<
   }, [isVisible, refreshKeyboardHandlers, releaseMouseButtons]);
 
   useEffect(() => {
+    const restoreDisplayFocus = () => {
+      if (!isVisible || !restoreInputFocusOnWindowFocusRef.current) return;
+      const displayElement = displayElementRef.current;
+      if (!displayElement) return;
+
+      restoreInputFocusOnWindowFocusRef.current = false;
+      hasKeyboardFocusRef.current = true;
+      displayElement.focus({ preventScroll: true });
+    };
+
+    const rememberDisplayFocus = () => {
+      const displayElement = displayElementRef.current;
+      restoreInputFocusOnWindowFocusRef.current =
+        restoreInputFocusOnWindowFocusRef.current ||
+        (isVisible &&
+          !!displayElement &&
+          (hasKeyboardFocusRef.current ||
+            document.activeElement === displayElement));
+    };
+
     const handleWindowFocus = () => {
       windowFocusedRef.current = true;
+      restoreDisplayFocus();
       refreshKeyboardHandlers();
     };
 
     const handleWindowBlur = () => {
+      rememberDisplayFocus();
       windowFocusedRef.current = false;
       hasKeyboardFocusRef.current = false;
       releaseMouseButtons();
@@ -683,8 +719,11 @@ export const GuacamoleDisplay = forwardRef<
       windowFocusedRef.current =
         document.visibilityState === "visible" && document.hasFocus();
       if (document.visibilityState !== "visible") {
+        rememberDisplayFocus();
         hasKeyboardFocusRef.current = false;
         releaseMouseButtons();
+      } else if (windowFocusedRef.current) {
+        restoreDisplayFocus();
       }
       refreshKeyboardHandlers();
     };
@@ -698,7 +737,7 @@ export const GuacamoleDisplay = forwardRef<
       window.removeEventListener("blur", handleWindowBlur);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [refreshKeyboardHandlers, releaseMouseButtons]);
+  }, [isVisible, refreshKeyboardHandlers, releaseMouseButtons]);
 
   useEffect(() => {
     return () => {
