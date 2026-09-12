@@ -80,11 +80,30 @@ export const GuacamoleDisplay = forwardRef<
   const windowFocusedRef = useRef(
     typeof document === "undefined" ? true : document.hasFocus(),
   );
+  const lastMousePositionRef = useRef({ x: 0, y: 0, hasPosition: false });
   const hasInitiatedRef = useRef(false);
   const isMountedRef = useRef(false);
   const isConnectingRef = useRef(false);
   const [isReady, setIsReady] = useState(false);
   const [hasError, setHasError] = useState(false);
+
+  const releaseMouseButtons = useCallback(() => {
+    const client = clientRef.current;
+    const position = lastMousePositionRef.current;
+    if (!client || !position.hasPosition) return;
+
+    client.sendMouseState(
+      new Guacamole.Mouse.State(
+        position.x,
+        position.y,
+        false,
+        false,
+        false,
+        false,
+        false,
+      ) as Guacamole.Mouse.State,
+    );
+  }, []);
 
   const disconnectClient = useCallback(() => {
     const client = clientRef.current;
@@ -109,6 +128,7 @@ export const GuacamoleDisplay = forwardRef<
     },
     sendMouse: (x: number, y: number, buttonMask: number) => {
       if (clientRef.current) {
+        lastMousePositionRef.current = { x, y, hasPosition: true };
         clientRef.current.sendMouseState(
           new Guacamole.Mouse.State({
             x,
@@ -418,12 +438,14 @@ export const GuacamoleDisplay = forwardRef<
     }
 
     const sendMouseEvent = (event: Guacamole.Mouse.MouseEvent) => {
-      displayElement.focus({ preventScroll: true });
       const scale = scaleRef.current;
       const state = event.state;
+      const x = Math.round(state.x / scale);
+      const y = Math.round(state.y / scale);
+      lastMousePositionRef.current = { x, y, hasPosition: true };
       const adjustedState = new Guacamole.Mouse.State(
-        Math.round(state.x / scale),
-        Math.round(state.y / scale),
+        x,
+        y,
         state.left,
         state.middle,
         state.right,
@@ -433,29 +455,31 @@ export const GuacamoleDisplay = forwardRef<
       client.sendMouseState(adjustedState);
     };
 
+    const mouse = new Guacamole.Mouse(displayElement);
+    const sendMouseState = (state: Guacamole.Mouse.State) => {
+      const scale = scaleRef.current;
+      const x = Math.round(state.x / scale);
+      const y = Math.round(state.y / scale);
+      lastMousePositionRef.current = { x, y, hasPosition: true };
+      const adjustedState = new Guacamole.Mouse.State(
+        x,
+        y,
+        state.left,
+        state.middle,
+        state.right,
+        state.up,
+        state.down,
+      ) as Guacamole.Mouse.State;
+      client.sendMouseState(adjustedState);
+    };
+    mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = sendMouseState;
+
     if (touchMode === "touchscreen") {
       const touchscreen = new Guacamole.Mouse.Touchscreen(displayElement);
       touchscreen.onEach(["mousedown", "mousemove", "mouseup"], sendMouseEvent);
     } else if (touchMode === "touchpad") {
       const touchpad = new Guacamole.Mouse.Touchpad(displayElement);
       touchpad.onEach(["mousedown", "mousemove", "mouseup"], sendMouseEvent);
-    } else {
-      const mouse = new Guacamole.Mouse(displayElement);
-      const sendMouseState = (state: Guacamole.Mouse.State) => {
-        displayElement.focus({ preventScroll: true });
-        const scale = scaleRef.current;
-        const adjustedState = new Guacamole.Mouse.State(
-          Math.round(state.x / scale),
-          Math.round(state.y / scale),
-          state.left,
-          state.middle,
-          state.right,
-          state.up,
-          state.down,
-        ) as Guacamole.Mouse.State;
-        client.sendMouseState(adjustedState);
-      };
-      mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = sendMouseState;
     }
 
     const keyboard = new Guacamole.Keyboard(displayElement);
@@ -466,15 +490,21 @@ export const GuacamoleDisplay = forwardRef<
       refreshKeyboardHandlers();
     };
 
+    const handleDisplayPointerStart = () => {
+      displayElement.focus({ preventScroll: true });
+      handleDisplayFocus();
+    };
+
     const handleDisplayBlur = () => {
       hasKeyboardFocusRef.current = false;
+      releaseMouseButtons();
       refreshKeyboardHandlers();
     };
 
     displayElement.addEventListener("focus", handleDisplayFocus);
     displayElement.addEventListener("blur", handleDisplayBlur);
-    displayElement.addEventListener("mousedown", handleDisplayFocus);
-    displayElement.addEventListener("touchstart", handleDisplayFocus, {
+    displayElement.addEventListener("mousedown", handleDisplayPointerStart);
+    displayElement.addEventListener("touchstart", handleDisplayPointerStart, {
       passive: true,
     });
     refreshKeyboardHandlers();
@@ -598,6 +628,7 @@ export const GuacamoleDisplay = forwardRef<
     refreshKeyboardHandlers,
     rescaleDisplay,
     disconnectClient,
+    releaseMouseButtons,
     connectionConfig.protocol,
     connectionConfig.type,
     connectionConfig.dpi,
@@ -617,10 +648,11 @@ export const GuacamoleDisplay = forwardRef<
   useEffect(() => {
     if (!isVisible) {
       hasKeyboardFocusRef.current = false;
+      releaseMouseButtons();
     }
 
     refreshKeyboardHandlers();
-  }, [isVisible, refreshKeyboardHandlers]);
+  }, [isVisible, refreshKeyboardHandlers, releaseMouseButtons]);
 
   useEffect(() => {
     const handleWindowFocus = () => {
@@ -631,6 +663,7 @@ export const GuacamoleDisplay = forwardRef<
     const handleWindowBlur = () => {
       windowFocusedRef.current = false;
       hasKeyboardFocusRef.current = false;
+      releaseMouseButtons();
       refreshKeyboardHandlers();
     };
 
@@ -639,6 +672,7 @@ export const GuacamoleDisplay = forwardRef<
         document.visibilityState === "visible" && document.hasFocus();
       if (document.visibilityState !== "visible") {
         hasKeyboardFocusRef.current = false;
+        releaseMouseButtons();
       }
       refreshKeyboardHandlers();
     };
@@ -652,7 +686,7 @@ export const GuacamoleDisplay = forwardRef<
       window.removeEventListener("blur", handleWindowBlur);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [refreshKeyboardHandlers]);
+  }, [refreshKeyboardHandlers, releaseMouseButtons]);
 
   useEffect(() => {
     return () => {
