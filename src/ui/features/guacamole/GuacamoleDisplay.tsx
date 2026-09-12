@@ -328,12 +328,19 @@ export const GuacamoleDisplay = forwardRef<
     setIsReady(false);
     setHasError(false);
 
+    // Let layout settle before measuring without depending on animation frames,
+    // which may be throttled while Electron windows or tabs are inactive.
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     if (!isMountedRef.current) {
       isConnectingRef.current = false;
       return;
     }
 
+    // The tab's DOM node can still be display:none (and report 0x0) when this
+    // tab is restored in the background. Measuring then would force the
+    // window-size fallback, which ignores the tab bar and makes the remote
+    // resolution too tall (the bottom gets cut off). Poll briefly for a real
+    // size before connecting so we capture the actual visible viewport.
     const measureContainer = () => {
       const rect = containerRef.current?.getBoundingClientRect();
       return { width: rect?.width || 0, height: rect?.height || 0 };
