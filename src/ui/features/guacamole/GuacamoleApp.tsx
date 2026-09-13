@@ -281,10 +281,10 @@ const GuacamoleAppInner = React.forwardRef<
       cancelAnimationFrame(reconcileFrame);
       window.clearTimeout(reconcileTimer);
       reconcileFrame = requestAnimationFrame(() => {
-        displayRef.current?.reconcileInput();
+        displayRef.current?.refreshViewport();
       });
       reconcileTimer = window.setTimeout(() => {
-        displayRef.current?.reconcileInput();
+        displayRef.current?.refreshViewport();
       }, 180);
     };
 
