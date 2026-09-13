@@ -1,6 +1,7 @@
 import React, {
   useState,
   useEffect,
+  useLayoutEffect,
   useRef,
   useCallback,
   useImperativeHandle,
@@ -149,6 +150,8 @@ const GuacamoleAppInner = React.forwardRef<
   const displayRef = useRef<GuacamoleDisplayHandle>(null);
   const fullscreenContainerRef = useRef<HTMLDivElement>(null);
   const [isNativeFullscreen, setIsNativeFullscreen] = useState(false);
+  const rdpFullscreenActiveRef = useRef(false);
+  const rdpOwnsDocumentFullscreenRef = useRef(false);
 
   const resolvedProtocolForConnect = (protocol ??
     hostConfig.connectionType ??
@@ -246,55 +249,89 @@ const GuacamoleAppInner = React.forwardRef<
   }, [needsCredentialPrompt]);
 
   const toggleNativeFullscreen = useCallback(async () => {
-    const container = fullscreenContainerRef.current;
-    if (!container) return;
+    if (rdpFullscreenActiveRef.current) {
+      try {
+        if (
+          rdpOwnsDocumentFullscreenRef.current &&
+          document.fullscreenElement
+        ) {
+          await document.exitFullscreen();
+        }
+      } catch {
+        toast.error(t("guacamole.fullscreenFailed"));
+        return;
+      }
 
-    if (!document.fullscreenEnabled) {
+      rdpOwnsDocumentFullscreenRef.current = false;
+      rdpFullscreenActiveRef.current = false;
+      setIsNativeFullscreen(false);
+      return;
+    }
+
+    if (!document.fullscreenElement && !document.fullscreenEnabled) {
       toast.error(t("guacamole.fullscreenUnsupported"));
       return;
     }
 
     try {
-      if (document.fullscreenElement === container) {
-        await document.exitFullscreen();
-        return;
+      // Keep the Guacamole display itself out of the Fullscreen API top layer.
+      // Match Apache Guacamole's document-root fullscreen approach so the
+      // mouse target remains in its normal DOM hierarchy across enter/exit.
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen({
+          navigationUI: "hide",
+        });
+        rdpOwnsDocumentFullscreenRef.current = true;
+      } else {
+        rdpOwnsDocumentFullscreenRef.current = false;
       }
 
       // Deliberately avoid Keyboard Lock / Pointer Lock here. The local OS and
       // browser must always remain reachable while an RDP session is open.
-      await container.requestFullscreen({ navigationUI: "hide" });
+      rdpFullscreenActiveRef.current = true;
+      setIsNativeFullscreen(true);
     } catch {
+      rdpOwnsDocumentFullscreenRef.current = false;
+      rdpFullscreenActiveRef.current = false;
+      setIsNativeFullscreen(false);
       toast.error(t("guacamole.fullscreenFailed"));
     }
   }, [t]);
 
   useEffect(() => {
-    let reconcileFrame = 0;
-    let reconcileTimer = 0;
-
     const handleFullscreenChange = () => {
-      const isFullscreen =
-        document.fullscreenElement === fullscreenContainerRef.current;
-      setIsNativeFullscreen(isFullscreen);
-      if (!isVisible) return;
-
-      cancelAnimationFrame(reconcileFrame);
-      window.clearTimeout(reconcileTimer);
-      reconcileFrame = requestAnimationFrame(() => {
-        displayRef.current?.refreshViewport();
-      });
-      reconcileTimer = window.setTimeout(() => {
-        displayRef.current?.refreshViewport();
-      }, 180);
+      // ESC or browser UI may end a document fullscreen session without going
+      // through our toolbar. Collapse the RDP overlay in that case as well.
+      if (rdpFullscreenActiveRef.current && !document.fullscreenElement) {
+        rdpOwnsDocumentFullscreenRef.current = false;
+        rdpFullscreenActiveRef.current = false;
+        setIsNativeFullscreen(false);
+      }
     };
 
     document.addEventListener("fullscreenchange", handleFullscreenChange);
     return () => {
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
-      cancelAnimationFrame(reconcileFrame);
-      window.clearTimeout(reconcileTimer);
     };
-  }, [isVisible]);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!isVisible) return;
+
+    // Refresh only after React has applied the fixed/normal layout. A second
+    // pass covers the asynchronous RDP resize without changing mouse bindings.
+    const refreshFrame = requestAnimationFrame(() => {
+      displayRef.current?.refreshViewport();
+    });
+    const refreshTimer = window.setTimeout(() => {
+      displayRef.current?.refreshViewport();
+    }, 180);
+
+    return () => {
+      cancelAnimationFrame(refreshFrame);
+      window.clearTimeout(refreshTimer);
+    };
+  }, [isNativeFullscreen, isVisible]);
 
   useEffect(() => {
     if (!tabId) return;
@@ -421,7 +458,11 @@ const GuacamoleAppInner = React.forwardRef<
   return (
     <div
       ref={fullscreenContainerRef}
-      className="relative w-full h-full"
+      className={
+        isNativeFullscreen
+          ? "fixed inset-0 z-[999] w-screen h-screen"
+          : "relative w-full h-full"
+      }
       style={{ backgroundColor: "var(--bg-base)" }}
     >
       {connectionError && (
