@@ -313,7 +313,11 @@ export const GuacamoleDisplay = forwardRef<
       if (!preserveRestoreIntent) {
         restoreInputFocusOnWindowFocusRef.current = false;
       }
+
+      const hadRemoteFocus = hasKeyboardFocusRef.current;
       hasKeyboardFocusRef.current = false;
+      if (!hadRemoteFocus) return;
+
       releaseMouseButtons();
       refreshKeyboardHandlers();
     },
