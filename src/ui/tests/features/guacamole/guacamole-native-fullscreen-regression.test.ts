@@ -42,17 +42,24 @@ describe("Guacamole native fullscreen regression guards", () => {
     expect(toolbarSource).toContain('t("guacamole.toolbar.exitFullscreen")');
   });
 
-  it("reconciles pointer ownership after entering or leaving fullscreen", () => {
+  it("refreshes viewport geometry and input ownership after any fullscreen transition", () => {
     const fullscreenHandler = appSource.slice(
       appSource.indexOf("const handleFullscreenChange"),
       appSource.indexOf('document.addEventListener("fullscreenchange"'),
     );
 
     expect(fullscreenHandler).toContain("if (!isVisible) return;");
-    expect(fullscreenHandler).toContain("displayRef.current?.reconcileInput()");
+    expect(fullscreenHandler).toContain(
+      "displayRef.current?.refreshViewport()",
+    );
     expect(fullscreenHandler).toContain("requestAnimationFrame");
     expect(fullscreenHandler).toContain("window.setTimeout");
-    expect(displaySource).toContain("reconcileInput: () => void;");
+    expect(displaySource).toContain("refreshViewport: () => void;");
+    expect(displaySource).toContain(
+      "client.sendSize(size.width, size.height);",
+    );
+    expect(displaySource).toContain("rescaleDisplay(true);");
+    expect(displaySource).toContain("reconcileInput();");
     expect(displaySource).toContain("document.elementFromPoint");
   });
 

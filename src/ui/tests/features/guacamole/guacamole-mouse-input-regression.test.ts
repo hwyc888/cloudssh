@@ -12,22 +12,18 @@ const appSource = readFileSync(
 );
 
 describe("Guacamole mouse input regression guards", () => {
-  it("uses native pointer events for physical mouse/pen input on modern browsers", () => {
+  it("keeps Guacamole.Mouse as the authoritative physical mouse transport", () => {
     expect(displaySource).toContain(
-      'if (typeof window.PointerEvent === "function")',
+      "const physicalMouse = new Guacamole.Mouse(displayElement);",
     );
     expect(displaySource).toContain(
-      'listen("pointerenter", handlePointerEnter)',
+      "physicalMouse.onmousedown =\n      physicalMouse.onmouseup =\n      physicalMouse.onmousemove =\n        sendPhysicalMouseState;",
     );
-    expect(displaySource).toContain('listen("pointermove", handlePointerMove)');
-    expect(displaySource).toContain('listen("pointerdown", handlePointerDown)');
-    expect(displaySource).toContain('listen("pointerup", handlePointerUp)');
-    expect(displaySource).toContain(
-      'listen("pointerleave", handlePointerLeave)',
-    );
-    expect(displaySource).toContain('event.pointerType !== "touch"');
-    expect(displaySource).toContain(
-      "const fallbackMouse = new Guacamole.Mouse(displayElement);",
+    expect(displaySource).toContain("const scale = display.getScale() || 1;");
+    expect(displaySource).toContain("client.sendMouseState(state, true);");
+    expect(displaySource).not.toContain("setPointerCapture(");
+    expect(displaySource).not.toContain(
+      "sendPhysicalMouseState(\n      clientX",
     );
   });
 
@@ -38,17 +34,13 @@ describe("Guacamole mouse input regression guards", () => {
     expect(displaySource).toContain('touchModeRef.current === "touchpad"');
   });
 
-  it("reactivates RDP input from pointer movement instead of depending on stale DOM focus", () => {
-    const activatePointer = displaySource.slice(
-      displaySource.indexOf("const activatePhysicalPointer"),
-      displaySource.indexOf("const handleDisplayFocus"),
+  it("reclaims keyboard ownership whenever the physical mouse enters or moves inside RDP", () => {
+    expect(displaySource).toContain('listen("mouseenter", claimRemoteInput)');
+    expect(displaySource).toContain('listen("mousemove", claimRemoteInput)');
+    expect(displaySource).toContain('listen("mousedown", claimRemoteInput)');
+    expect(displaySource).toContain(
+      "pointerInsideDisplayRef.current = true;\n      focusRemoteInput();",
     );
-
-    expect(activatePointer).toContain(
-      "pointerInsideDisplayRef.current = true;",
-    );
-    expect(activatePointer).toContain("focusRemoteInput();");
-    expect(activatePointer).toContain("sendPhysicalMouseState");
     expect(displaySource).not.toContain(
       "hasKeyboardFocusRef.current || displayIsFocused",
     );
@@ -67,43 +59,43 @@ describe("Guacamole mouse input regression guards", () => {
     expect(displaySource).toContain("pressedRemoteKeysRef.current.clear()");
   });
 
-  it("releases remote input ownership whenever the pointer/window leaves RDP", () => {
-    const pointerLeaveHandler = displaySource.slice(
-      displaySource.indexOf("const handlePointerLeave"),
-      displaySource.indexOf("const handlePointerCancel"),
+  it("releases remote input ownership whenever the mouse/window leaves RDP", () => {
+    expect(displaySource).toContain('listen("mouseleave", releaseRemoteInput)');
+    expect(displaySource).toContain(
+      "pointerInsideDisplayRef.current = false;\n      clearRemoteInputFocus(false);",
     );
+
     const windowBlurHandler = displaySource.slice(
       displaySource.indexOf("const handleWindowBlur"),
       displaySource.indexOf("const handleVisibilityChange"),
-    );
-
-    expect(pointerLeaveHandler).toContain(
-      "pointerInsideDisplayRef.current = false;",
-    );
-    expect(pointerLeaveHandler).toContain("clearRemoteInputFocus(false);");
-    expect(displaySource).toContain('listen("lostpointercapture", () => {');
-    expect(displaySource).toContain(
-      "releaseMouseButtons();\n        reconcileInput();",
     );
     expect(windowBlurHandler).toContain("rememberRemoteOwnership();");
     expect(windowBlurHandler).toContain("clearRemoteInputFocus(true);");
     expect(displaySource).toContain("releaseMouseButtons();");
   });
 
-  it("reconciles current pointer hit-testing after local, window, fullscreen, or layout changes", () => {
+  it("reconciles current mouse hit-testing after window, fullscreen, or layout changes", () => {
     expect(displaySource).toContain("document.elementFromPoint");
     expect(displaySource).toContain("displayElement.contains(hit)");
     expect(displaySource).toContain("reconcileInput: () => void;");
     expect(displaySource).toContain(
       "updateGlobalPointer(event.clientX, event.clientY);\n      reconcileInput();",
     );
-    expect(appSource).toContain("displayRef.current?.reconcileInput()");
+    expect(displaySource).toContain(
+      'window.addEventListener("mousemove", handleGlobalMouse, true)',
+    );
+    expect(appSource).toContain("displayRef.current?.refreshViewport()");
   });
 
-  it("maps physical mouse coordinates from the current rendered display geometry", () => {
-    expect(displaySource).toContain("mapClientPointToRemote(");
-    expect(displaySource).toContain("displayElement.getBoundingClientRect()");
-    expect(displaySource).toContain("display.getWidth()");
-    expect(displaySource).toContain("display.getHeight()");
+  it("keeps the local cursor available outside the actual remote display", () => {
+    expect(displaySource).toContain('displayElement.style.cursor = "none";');
+    expect(displaySource).not.toContain('cursor: isReady ? "none" : "default"');
+  });
+
+  it("does not replace the proven mouse transport with Pointer Events", () => {
+    expect(displaySource).not.toContain('listen("pointermove"');
+    expect(displaySource).not.toContain('listen("pointerdown"');
+    expect(displaySource).not.toContain("event.pointerType");
+    expect(displaySource).not.toContain("requestPointerLock");
   });
 });

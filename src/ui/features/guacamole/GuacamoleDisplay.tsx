@@ -22,12 +22,6 @@ import {
   pasteTextToRemote,
 } from "./guacamole-clipboard.ts";
 import { getGuacamoleDisplaySize } from "./guacamole-display-size.ts";
-import {
-  GUACAMOLE_WHEEL_THRESHOLD,
-  domButtonsToGuacamole,
-  mapClientPointToRemote,
-  normalizeWheelDelta,
-} from "./guacamole-pointer-input.ts";
 
 export type GuacamoleConnectionType = "rdp" | "vnc" | "telnet";
 
@@ -51,6 +45,7 @@ export interface GuacamoleDisplayHandle {
   isConnected: () => boolean;
   focus: () => void;
   reconcileInput: () => void;
+  refreshViewport: () => void;
   sendKey: (keysym: number, pressed: boolean) => void;
   sendMouse: (x: number, y: number, buttonMask: number) => void;
   setClipboard: (data: string) => void;
@@ -86,7 +81,6 @@ export const GuacamoleDisplay = forwardRef<
   isVisibleRef.current = isVisible;
   const touchModeRef = useRef<GuacamoleTouchMode | null>(touchMode ?? null);
   touchModeRef.current = touchMode ?? null;
-  const scaleRef = useRef<number>(1);
   const resizeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const inputCleanupRef = useRef<(() => void) | null>(null);
   const hasKeyboardFocusRef = useRef(false);
@@ -101,7 +95,6 @@ export const GuacamoleDisplay = forwardRef<
     hasPosition: false,
   });
   const lastMousePositionRef = useRef({ x: 0, y: 0, hasPosition: false });
-  const wheelDeltaRef = useRef(0);
   const pressedRemoteKeysRef = useRef(new Set<number>());
   const hasInitiatedRef = useRef(false);
   const isMountedRef = useRef(false);
@@ -155,7 +148,6 @@ export const GuacamoleDisplay = forwardRef<
     hasKeyboardFocusRef.current = false;
     restoreInputFocusOnWindowFocusRef.current = false;
     pointerInsideDisplayRef.current = false;
-    wheelDeltaRef.current = 0;
 
     clientRef.current = null;
     displayElementRef.current = null;
@@ -321,7 +313,11 @@ export const GuacamoleDisplay = forwardRef<
       if (!preserveRestoreIntent) {
         restoreInputFocusOnWindowFocusRef.current = false;
       }
+
+      const hadRemoteFocus = hasKeyboardFocusRef.current;
       hasKeyboardFocusRef.current = false;
+      if (!hadRemoteFocus) return;
+
       releaseMouseButtons();
       refreshKeyboardHandlers();
     },
@@ -370,11 +366,66 @@ export const GuacamoleDisplay = forwardRef<
     }
   }, [clearRemoteInputFocus, focusRemoteInput]);
 
+  const rescaleDisplay = useCallback((immediate: boolean = false) => {
+    if (!clientRef.current || !containerRef.current) return;
+
+    const performRescale = () => {
+      if (!clientRef.current || !containerRef.current) return;
+
+      const display = clientRef.current.getDisplay();
+      const cWidth = containerRef.current.clientWidth;
+      const cHeight = containerRef.current.clientHeight;
+      const displayWidth = display.getWidth();
+      const displayHeight = display.getHeight();
+
+      if (displayWidth > 0 && displayHeight > 0 && cWidth > 0 && cHeight > 0) {
+        const scale = Math.min(cWidth / displayWidth, cHeight / displayHeight);
+        display.scale(scale);
+      }
+    };
+
+    if (immediate) {
+      performRescale();
+    } else {
+      if (resizeTimeoutRef.current) {
+        clearTimeout(resizeTimeoutRef.current);
+      }
+      resizeTimeoutRef.current = setTimeout(performRescale, 200);
+    }
+  }, []);
+
+  const refreshViewport = useCallback(() => {
+    const client = clientRef.current;
+    const container = containerRef.current;
+    if (!client || !container) return;
+
+    const rect = container.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) {
+      const size = getGuacamoleDisplaySize(
+        rect.width,
+        rect.height,
+        connectionConfig.protocol ?? connectionConfig.type,
+        window.devicePixelRatio,
+        connectionConfig.dpi,
+      );
+      client.sendSize(size.width, size.height);
+      rescaleDisplay(true);
+    }
+    reconcileInput();
+  }, [
+    connectionConfig.dpi,
+    connectionConfig.protocol,
+    connectionConfig.type,
+    reconcileInput,
+    rescaleDisplay,
+  ]);
+
   useImperativeHandle(ref, () => ({
     disconnect: disconnectClient,
     isConnected: () => isReady && !hasError,
     focus: focusRemoteInput,
     reconcileInput,
+    refreshViewport,
     sendKey: (keysym: number, pressed: boolean) => {
       if (clientRef.current) {
         clientRef.current.sendKeyEvent(pressed ? 1 : 0, keysym);
@@ -403,35 +454,6 @@ export const GuacamoleDisplay = forwardRef<
       }
     },
   }));
-
-  const rescaleDisplay = useCallback((immediate: boolean = false) => {
-    if (!clientRef.current || !containerRef.current) return;
-
-    const performRescale = () => {
-      if (!clientRef.current || !containerRef.current) return;
-
-      const display = clientRef.current.getDisplay();
-      const cWidth = containerRef.current.clientWidth;
-      const cHeight = containerRef.current.clientHeight;
-      const displayWidth = display.getWidth();
-      const displayHeight = display.getHeight();
-
-      if (displayWidth > 0 && displayHeight > 0 && cWidth > 0 && cHeight > 0) {
-        const scale = Math.min(cWidth / displayWidth, cHeight / displayHeight);
-        scaleRef.current = scale;
-        display.scale(scale);
-      }
-    };
-
-    if (immediate) {
-      performRescale();
-    } else {
-      if (resizeTimeoutRef.current) {
-        clearTimeout(resizeTimeoutRef.current);
-      }
-      resizeTimeoutRef.current = setTimeout(performRescale, 200);
-    }
-  }, []);
 
   const connect = useCallback(async () => {
     if (isConnectingRef.current) return;
@@ -510,6 +532,9 @@ export const GuacamoleDisplay = forwardRef<
 
     displayElement.setAttribute("tabindex", "0");
     displayElement.style.outline = "none";
+    // Hide the local cursor only while it is actually over the remote display.
+    // Letterbox margins and CloudSSH UI keep the normal local cursor visible.
+    displayElement.style.cursor = "none";
 
     const useNativePasteFallback = isFirefoxBrowser();
     if (useNativePasteFallback) {
@@ -550,21 +575,14 @@ export const GuacamoleDisplay = forwardRef<
     }
 
     const sendTouchMouseEvent = (event: Guacamole.Mouse.MouseEvent) => {
-      const scale = scaleRef.current;
       const state = event.state;
-      const x = Math.round(state.x / scale);
-      const y = Math.round(state.y / scale);
-      lastMousePositionRef.current = { x, y, hasPosition: true };
-      const adjustedState = new Guacamole.Mouse.State(
-        x,
-        y,
-        state.left,
-        state.middle,
-        state.right,
-        state.up,
-        state.down,
-      ) as Guacamole.Mouse.State;
-      client.sendMouseState(adjustedState);
+      const scale = display.getScale() || 1;
+      lastMousePositionRef.current = {
+        x: Math.round(state.x / scale),
+        y: Math.round(state.y / scale),
+        hasPosition: true,
+      };
+      client.sendMouseState(state, true);
     };
 
     const touchscreen = new Guacamole.Mouse.Touchscreen(displayElement);
@@ -588,53 +606,29 @@ export const GuacamoleDisplay = forwardRef<
       };
     };
 
-    const sendPhysicalMouseState = (
-      clientX: number,
-      clientY: number,
-      buttons: number,
-      scrollUp: boolean = false,
-      scrollDown: boolean = false,
-    ) => {
+    // Keep Guacamole.Mouse as the authoritative physical mouse transport.
+    // It is the path that was already proven to work for normal RDP input.
+    // Native DOM mouse events below are used only to decide whether keyboard
+    // focus belongs to RDP or to the surrounding CloudSSH UI.
+    const physicalMouse = new Guacamole.Mouse(displayElement);
+    const sendPhysicalMouseState = (state: Guacamole.Mouse.State) => {
       if (clientRef.current !== client || !isVisibleRef.current) return;
 
-      const point = mapClientPointToRemote(
-        displayElement.getBoundingClientRect(),
-        display.getWidth(),
-        display.getHeight(),
-        clientX,
-        clientY,
-      );
-      if (!point) return;
-
-      const buttonState = domButtonsToGuacamole(buttons);
+      const scale = display.getScale() || 1;
       lastMousePositionRef.current = {
-        x: point.x,
-        y: point.y,
+        x: Math.round(state.x / scale),
+        y: Math.round(state.y / scale),
         hasPosition: true,
       };
-      client.sendMouseState(
-        new Guacamole.Mouse.State(
-          point.x,
-          point.y,
-          buttonState.left,
-          buttonState.middle,
-          buttonState.right,
-          scrollUp,
-          scrollDown,
-        ) as Guacamole.Mouse.State,
-      );
-    };
 
-    const activatePhysicalPointer = (
-      clientX: number,
-      clientY: number,
-      buttons: number,
-    ) => {
-      rememberClientPointer(clientX, clientY);
-      pointerInsideDisplayRef.current = true;
-      focusRemoteInput();
-      sendPhysicalMouseState(clientX, clientY, buttons);
+      // Guacamole already knows its exact display scale. Let the client apply
+      // that scale itself instead of duplicating coordinate conversion here.
+      client.sendMouseState(state, true);
     };
+    physicalMouse.onmousedown =
+      physicalMouse.onmouseup =
+      physicalMouse.onmousemove =
+        sendPhysicalMouseState;
 
     const handleDisplayFocus = () => {
       if (!isVisibleRef.current) return;
@@ -656,48 +650,6 @@ export const GuacamoleDisplay = forwardRef<
       focusRemoteInput();
     };
 
-    const handleContextMenu = (event: Event) => {
-      event.preventDefault();
-    };
-
-    const handleWheel = (event: WheelEvent) => {
-      rememberClientPointer(event.clientX, event.clientY);
-      pointerInsideDisplayRef.current = true;
-      focusRemoteInput();
-
-      wheelDeltaRef.current += normalizeWheelDelta(
-        event.deltaY,
-        event.deltaMode,
-      );
-      let pulses = 0;
-      while (
-        Math.abs(wheelDeltaRef.current) >= GUACAMOLE_WHEEL_THRESHOLD &&
-        pulses < 20
-      ) {
-        const scrollDown = wheelDeltaRef.current > 0;
-        sendPhysicalMouseState(
-          event.clientX,
-          event.clientY,
-          event.buttons,
-          !scrollDown,
-          scrollDown,
-        );
-        sendPhysicalMouseState(
-          event.clientX,
-          event.clientY,
-          event.buttons,
-          false,
-          false,
-        );
-        wheelDeltaRef.current += scrollDown
-          ? -GUACAMOLE_WHEEL_THRESHOLD
-          : GUACAMOLE_WHEEL_THRESHOLD;
-        pulses += 1;
-      }
-      if (pulses === 20) wheelDeltaRef.current = 0;
-      event.preventDefault();
-    };
-
     const cleanupCallbacks: Array<() => void> = [];
     const listen = <K extends keyof HTMLElementEventMap>(
       type: K,
@@ -717,100 +669,22 @@ export const GuacamoleDisplay = forwardRef<
     listen("focus", handleDisplayFocus);
     listen("blur", handleDisplayBlur);
     listen("touchstart", handleTouchStart, { passive: true });
-    listen("contextmenu", handleContextMenu);
-    listen("wheel", handleWheel, { passive: false });
 
-    if (typeof window.PointerEvent === "function") {
-      const isDirectPointer = (event: PointerEvent) =>
-        event.pointerType !== "touch";
+    const claimRemoteInput = (event: MouseEvent) => {
+      rememberClientPointer(event.clientX, event.clientY);
+      pointerInsideDisplayRef.current = true;
+      focusRemoteInput();
+    };
+    const releaseRemoteInput = (event: MouseEvent) => {
+      rememberClientPointer(event.clientX, event.clientY);
+      pointerInsideDisplayRef.current = false;
+      clearRemoteInputFocus(false);
+    };
 
-      const handlePointerEnter = (event: PointerEvent) => {
-        if (!isDirectPointer(event)) return;
-        activatePhysicalPointer(event.clientX, event.clientY, event.buttons);
-      };
-
-      const handlePointerMove = (event: PointerEvent) => {
-        if (!isDirectPointer(event)) return;
-        activatePhysicalPointer(event.clientX, event.clientY, event.buttons);
-      };
-
-      const handlePointerDown = (event: PointerEvent) => {
-        if (!isDirectPointer(event)) return;
-        activatePhysicalPointer(event.clientX, event.clientY, event.buttons);
-        try {
-          displayElement.setPointerCapture(event.pointerId);
-        } catch {
-          // Pointer capture is best-effort and only needed while dragging.
-        }
-      };
-
-      const handlePointerUp = (event: PointerEvent) => {
-        if (!isDirectPointer(event)) return;
-        activatePhysicalPointer(event.clientX, event.clientY, event.buttons);
-        try {
-          if (displayElement.hasPointerCapture(event.pointerId)) {
-            displayElement.releasePointerCapture(event.pointerId);
-          }
-        } catch {
-          // The browser may already have released capture.
-        }
-        reconcileInput();
-      };
-
-      const handlePointerLeave = (event: PointerEvent) => {
-        if (!isDirectPointer(event)) return;
-        rememberClientPointer(event.clientX, event.clientY);
-        pointerInsideDisplayRef.current = false;
-        clearRemoteInputFocus(false);
-      };
-
-      const handlePointerCancel = (event: PointerEvent) => {
-        if (!isDirectPointer(event)) return;
-        rememberClientPointer(event.clientX, event.clientY);
-        pointerInsideDisplayRef.current = false;
-        clearRemoteInputFocus(false);
-      };
-
-      listen("pointerenter", handlePointerEnter);
-      listen("pointermove", handlePointerMove);
-      listen("pointerdown", handlePointerDown);
-      listen("pointerup", handlePointerUp);
-      listen("pointerleave", handlePointerLeave);
-      listen("pointercancel", handlePointerCancel);
-      listen("lostpointercapture", () => {
-        releaseMouseButtons();
-        reconcileInput();
-      });
-    } else {
-      const fallbackMouse = new Guacamole.Mouse(displayElement);
-      const sendFallbackMouseState = (state: Guacamole.Mouse.State) => {
-        const scale = scaleRef.current;
-        const x = Math.round(state.x / scale);
-        const y = Math.round(state.y / scale);
-        pointerInsideDisplayRef.current = true;
-        focusRemoteInput();
-        lastMousePositionRef.current = { x, y, hasPosition: true };
-        client.sendMouseState(
-          new Guacamole.Mouse.State(
-            x,
-            y,
-            state.left,
-            state.middle,
-            state.right,
-            state.up,
-            state.down,
-          ) as Guacamole.Mouse.State,
-        );
-      };
-      fallbackMouse.onmousedown =
-        fallbackMouse.onmouseup =
-        fallbackMouse.onmousemove =
-          sendFallbackMouseState;
-      listen("mouseleave", () => {
-        pointerInsideDisplayRef.current = false;
-        clearRemoteInputFocus(false);
-      });
-    }
+    listen("mouseenter", claimRemoteInput);
+    listen("mousemove", claimRemoteInput);
+    listen("mousedown", claimRemoteInput);
+    listen("mouseleave", releaseRemoteInput);
 
     inputCleanupRef.current?.();
     inputCleanupRef.current = () => {
@@ -939,7 +813,6 @@ export const GuacamoleDisplay = forwardRef<
     refreshKeyboardHandlers,
     rescaleDisplay,
     disconnectClient,
-    releaseMouseButtons,
     clearRemoteInputFocus,
     focusRemoteInput,
     reconcileInput,
@@ -984,12 +857,6 @@ export const GuacamoleDisplay = forwardRef<
       };
     };
 
-    const handleGlobalPointer = (event: PointerEvent) => {
-      if (event.pointerType === "touch") return;
-      updateGlobalPointer(event.clientX, event.clientY);
-      reconcileInput();
-    };
-
     const handleGlobalMouse = (event: MouseEvent) => {
       updateGlobalPointer(event.clientX, event.clientY);
       reconcileInput();
@@ -1021,25 +888,15 @@ export const GuacamoleDisplay = forwardRef<
     window.addEventListener("focus", handleWindowFocus);
     window.addEventListener("blur", handleWindowBlur);
     document.addEventListener("visibilitychange", handleVisibilityChange);
-    if (typeof window.PointerEvent === "function") {
-      window.addEventListener("pointermove", handleGlobalPointer, true);
-      window.addEventListener("pointerdown", handleGlobalPointer, true);
-    } else {
-      window.addEventListener("mousemove", handleGlobalMouse, true);
-      window.addEventListener("mousedown", handleGlobalMouse, true);
-    }
+    window.addEventListener("mousemove", handleGlobalMouse, true);
+    window.addEventListener("mousedown", handleGlobalMouse, true);
 
     return () => {
       window.removeEventListener("focus", handleWindowFocus);
       window.removeEventListener("blur", handleWindowBlur);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      if (typeof window.PointerEvent === "function") {
-        window.removeEventListener("pointermove", handleGlobalPointer, true);
-        window.removeEventListener("pointerdown", handleGlobalPointer, true);
-      } else {
-        window.removeEventListener("mousemove", handleGlobalMouse, true);
-        window.removeEventListener("mousedown", handleGlobalMouse, true);
-      }
+      window.removeEventListener("mousemove", handleGlobalMouse, true);
+      window.removeEventListener("mousedown", handleGlobalMouse, true);
     };
   }, [clearRemoteInputFocus, reconcileInput]);
 
@@ -1145,7 +1002,6 @@ export const GuacamoleDisplay = forwardRef<
         ref={displayRef}
         className="relative w-full h-full flex items-center justify-center"
         style={{
-          cursor: isReady ? "none" : "default",
           visibility: isReady ? "visible" : "hidden",
         }}
       />
