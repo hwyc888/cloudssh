@@ -52,4 +52,36 @@ describe("Guacamole physical mouse runtime", () => {
     expect(downs).toEqual([true]);
     expect(ups).toEqual([false]);
   });
+
+  it("continues generating mouse events after the browser loses and regains focus", () => {
+    const element = document.createElement("div");
+    document.body.appendChild(element);
+    mounted.push(element);
+
+    const mouse = new Guacamole.Mouse(element);
+    const moves: Array<{ x: number; y: number }> = [];
+    mouse.onmousemove = (state) => moves.push({ x: state.x, y: state.y });
+
+    element.dispatchEvent(
+      new MouseEvent("mousemove", {
+        clientX: 120,
+        clientY: 80,
+        bubbles: true,
+      }),
+    );
+    window.dispatchEvent(new Event("blur"));
+    window.dispatchEvent(new Event("focus"));
+    element.dispatchEvent(
+      new MouseEvent("mousemove", {
+        clientX: 180,
+        clientY: 110,
+        bubbles: true,
+      }),
+    );
+
+    expect(moves).toEqual([
+      { x: 120, y: 80 },
+      { x: 180, y: 110 },
+    ]);
+  });
 });

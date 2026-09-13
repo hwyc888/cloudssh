@@ -34,17 +34,23 @@ describe("Guacamole mouse input regression guards", () => {
     expect(displaySource).toContain('touchModeRef.current === "touchpad"');
   });
 
-  it("reclaims keyboard ownership whenever the physical mouse enters or moves inside RDP", () => {
-    expect(displaySource).toContain('listen("mouseenter", claimRemoteInput)');
-    expect(displaySource).toContain('listen("mousemove", claimRemoteInput)');
-    expect(displaySource).toContain('listen("mousedown", claimRemoteInput)');
+  it("keeps mouse transport independent from keyboard focus and only focuses on an actual click", () => {
     expect(displaySource).toContain(
-      "pointerInsideDisplayRef.current = true;\n      focusRemoteInput();",
+      'listen("mousedown", handleDisplayPointerStart)',
+    );
+    expect(displaySource).toContain(
+      'listen("touchstart", handleDisplayPointerStart, { passive: true })',
     );
     expect(displaySource).not.toContain(
-      "hasKeyboardFocusRef.current || displayIsFocused",
+      'listen("mouseenter", claimRemoteInput)',
     );
-    expect(displaySource).toContain("hasKeyboardFocusRef.current;");
+    expect(displaySource).not.toContain(
+      'listen("mousemove", claimRemoteInput)',
+    );
+    expect(displaySource).not.toContain("document.elementFromPoint");
+    expect(displaySource).not.toContain(
+      'window.addEventListener("mousemove", handleGlobalMouse, true)',
+    );
   });
 
   it("releases pressed remote modifier keys before local input takes over", () => {
@@ -59,32 +65,28 @@ describe("Guacamole mouse input regression guards", () => {
     expect(displaySource).toContain("pressedRemoteKeysRef.current.clear()");
   });
 
-  it("releases remote input ownership whenever the mouse/window leaves RDP", () => {
-    expect(displaySource).toContain('listen("mouseleave", releaseRemoteInput)');
-    expect(displaySource).toContain(
-      "pointerInsideDisplayRef.current = false;\n      clearRemoteInputFocus(false);",
-    );
-
+  it("releases remote keyboard/buttons when browser focus leaves RDP without installing global mouse capture", () => {
     const windowBlurHandler = displaySource.slice(
       displaySource.indexOf("const handleWindowBlur"),
       displaySource.indexOf("const handleVisibilityChange"),
     );
-    expect(windowBlurHandler).toContain("rememberRemoteOwnership();");
-    expect(windowBlurHandler).toContain("clearRemoteInputFocus(true);");
+    expect(windowBlurHandler).toContain("clearRemoteInputFocus();");
     expect(displaySource).toContain("releaseMouseButtons();");
+    expect(displaySource).not.toContain("lastClientPointerRef");
+    expect(displaySource).not.toContain("pointerInsideDisplayRef");
   });
 
-  it("reconciles current mouse hit-testing after window, fullscreen, or layout changes", () => {
-    expect(displaySource).toContain("document.elementFromPoint");
-    expect(displaySource).toContain("displayElement.contains(hit)");
-    expect(displaySource).toContain("reconcileInput: () => void;");
-    expect(displaySource).toContain(
-      "updateGlobalPointer(event.clientX, event.clientY);\n      reconcileInput();",
-    );
-    expect(displaySource).toContain(
-      'window.addEventListener("mousemove", handleGlobalMouse, true)',
-    );
+  it("keeps fullscreen/layout changes limited to viewport refresh instead of mouse ownership", () => {
     expect(appSource).toContain("displayRef.current?.refreshViewport()");
+    expect(displaySource).toContain("refreshViewport: () => void;");
+    expect(displaySource).not.toContain("reconcileInput");
+    expect(displaySource).not.toContain("elementFromPoint");
+  });
+
+  it("does not perform clipboard reads whenever the mouse merely re-enters RDP", () => {
+    expect(displaySource).not.toContain(
+      'container.addEventListener("mouseenter", handleFocus)',
+    );
   });
 
   it("keeps the local cursor available outside the actual remote display", () => {
