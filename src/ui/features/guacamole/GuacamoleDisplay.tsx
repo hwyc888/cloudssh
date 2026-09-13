@@ -43,8 +43,6 @@ export interface GuacamoleConnectionConfig {
 export interface GuacamoleDisplayHandle {
   disconnect: () => void;
   isConnected: () => boolean;
-  focus: () => void;
-  reconcileInput: () => void;
   refreshViewport: () => void;
   sendKey: (keysym: number, pressed: boolean) => void;
   sendMouse: (x: number, y: number, buttonMask: number) => void;
@@ -84,16 +82,9 @@ export const GuacamoleDisplay = forwardRef<
   const resizeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const inputCleanupRef = useRef<(() => void) | null>(null);
   const hasKeyboardFocusRef = useRef(false);
-  const restoreInputFocusOnWindowFocusRef = useRef(false);
-  const pointerInsideDisplayRef = useRef(false);
   const windowFocusedRef = useRef(
     typeof document === "undefined" ? true : document.hasFocus(),
   );
-  const lastClientPointerRef = useRef({
-    x: 0,
-    y: 0,
-    hasPosition: false,
-  });
   const lastMousePositionRef = useRef({ x: 0, y: 0, hasPosition: false });
   const pressedRemoteKeysRef = useRef(new Set<number>());
   const hasInitiatedRef = useRef(false);
@@ -146,8 +137,6 @@ export const GuacamoleDisplay = forwardRef<
     releaseRemoteKeys();
     keyboardRef.current = null;
     hasKeyboardFocusRef.current = false;
-    restoreInputFocusOnWindowFocusRef.current = false;
-    pointerInsideDisplayRef.current = false;
 
     clientRef.current = null;
     displayElementRef.current = null;
@@ -295,12 +284,8 @@ export const GuacamoleDisplay = forwardRef<
     const windowFocused =
       document.visibilityState === "visible" && document.hasFocus();
     windowFocusedRef.current = windowFocused;
-    if (!windowFocused) {
-      restoreInputFocusOnWindowFocusRef.current = true;
-      return;
-    }
+    if (!windowFocused) return;
 
-    restoreInputFocusOnWindowFocusRef.current = false;
     hasKeyboardFocusRef.current = true;
     if (document.activeElement !== displayElement) {
       displayElement.focus({ preventScroll: true });
@@ -308,63 +293,12 @@ export const GuacamoleDisplay = forwardRef<
     refreshKeyboardHandlers();
   }, [refreshKeyboardHandlers]);
 
-  const clearRemoteInputFocus = useCallback(
-    (preserveRestoreIntent: boolean = false) => {
-      if (!preserveRestoreIntent) {
-        restoreInputFocusOnWindowFocusRef.current = false;
-      }
-
-      const hadRemoteFocus = hasKeyboardFocusRef.current;
-      hasKeyboardFocusRef.current = false;
-      if (!hadRemoteFocus) return;
-
-      releaseMouseButtons();
-      refreshKeyboardHandlers();
-    },
-    [refreshKeyboardHandlers, releaseMouseButtons],
-  );
-
-  const reconcileInput = useCallback(() => {
-    const displayElement = displayElementRef.current;
-    if (!displayElement || !clientRef.current || !isVisibleRef.current) {
-      pointerInsideDisplayRef.current = false;
-      clearRemoteInputFocus(false);
-      return;
-    }
-
-    const lastPointer = lastClientPointerRef.current;
-    let pointerInside = pointerInsideDisplayRef.current;
-    if (
-      lastPointer.hasPosition &&
-      typeof document.elementFromPoint === "function"
-    ) {
-      const hit = document.elementFromPoint(lastPointer.x, lastPointer.y);
-      pointerInside =
-        !!hit && (hit === displayElement || displayElement.contains(hit));
-      pointerInsideDisplayRef.current = pointerInside;
-    }
-
-    const windowFocused =
-      document.visibilityState === "visible" && document.hasFocus();
-    windowFocusedRef.current = windowFocused;
-    if (!windowFocused) {
-      restoreInputFocusOnWindowFocusRef.current =
-        restoreInputFocusOnWindowFocusRef.current ||
-        (isVisibleRef.current &&
-          (hasKeyboardFocusRef.current || pointerInside));
-      clearRemoteInputFocus(true);
-      return;
-    }
-
-    if (
-      pointerInside ||
-      (!lastPointer.hasPosition && restoreInputFocusOnWindowFocusRef.current)
-    ) {
-      focusRemoteInput();
-    } else {
-      clearRemoteInputFocus(false);
-    }
-  }, [clearRemoteInputFocus, focusRemoteInput]);
+  const clearRemoteInputFocus = useCallback(() => {
+    const hadRemoteFocus = hasKeyboardFocusRef.current;
+    hasKeyboardFocusRef.current = false;
+    if (hadRemoteFocus) releaseMouseButtons();
+    refreshKeyboardHandlers();
+  }, [refreshKeyboardHandlers, releaseMouseButtons]);
 
   const rescaleDisplay = useCallback((immediate: boolean = false) => {
     if (!clientRef.current || !containerRef.current) return;
@@ -411,20 +345,16 @@ export const GuacamoleDisplay = forwardRef<
       client.sendSize(size.width, size.height);
       rescaleDisplay(true);
     }
-    reconcileInput();
   }, [
     connectionConfig.dpi,
     connectionConfig.protocol,
     connectionConfig.type,
-    reconcileInput,
     rescaleDisplay,
   ]);
 
   useImperativeHandle(ref, () => ({
     disconnect: disconnectClient,
     isConnected: () => isReady && !hasError,
-    focus: focusRemoteInput,
-    reconcileInput,
     refreshViewport,
     sendKey: (keysym: number, pressed: boolean) => {
       if (clientRef.current) {
@@ -565,7 +495,6 @@ export const GuacamoleDisplay = forwardRef<
     display.onresize = () => {
       if (!isMountedRef.current || clientRef.current !== client) return;
       rescaleDisplay(true);
-      reconcileInput();
       setIsReady(true);
     };
 
@@ -598,18 +527,12 @@ export const GuacamoleDisplay = forwardRef<
     const keyboard = new Guacamole.Keyboard(displayElement);
     keyboardRef.current = keyboard;
 
-    const rememberClientPointer = (clientX: number, clientY: number) => {
-      lastClientPointerRef.current = {
-        x: clientX,
-        y: clientY,
-        hasPosition: true,
-      };
-    };
-
     // Keep Guacamole.Mouse as the authoritative physical mouse transport.
-    // It is the path that was already proven to work for normal RDP input.
-    // Native DOM mouse events below are used only to decide whether keyboard
-    // focus belongs to RDP or to the surrounding CloudSSH UI.
+    // Mouse transport stays independent of keyboard/window focus. This is
+    // intentionally the same model Guacamole itself uses: mouse movement is
+    // forwarded whenever it reaches the display, while a click establishes
+    // keyboard focus. Fullscreen transitions therefore cannot strand mouse
+    // ownership in a stale focus state.
     const physicalMouse = new Guacamole.Mouse(displayElement);
     const sendPhysicalMouseState = (state: Guacamole.Mouse.State) => {
       if (clientRef.current !== client || !isVisibleRef.current) return;
@@ -637,16 +560,10 @@ export const GuacamoleDisplay = forwardRef<
     };
 
     const handleDisplayBlur = () => {
-      const shouldRestore =
-        isVisibleRef.current &&
-        !document.hasFocus() &&
-        (hasKeyboardFocusRef.current || pointerInsideDisplayRef.current);
-      restoreInputFocusOnWindowFocusRef.current = shouldRestore;
-      clearRemoteInputFocus(shouldRestore);
+      clearRemoteInputFocus();
     };
 
-    const handleTouchStart = () => {
-      pointerInsideDisplayRef.current = true;
+    const handleDisplayPointerStart = () => {
       focusRemoteInput();
     };
 
@@ -668,23 +585,8 @@ export const GuacamoleDisplay = forwardRef<
 
     listen("focus", handleDisplayFocus);
     listen("blur", handleDisplayBlur);
-    listen("touchstart", handleTouchStart, { passive: true });
-
-    const claimRemoteInput = (event: MouseEvent) => {
-      rememberClientPointer(event.clientX, event.clientY);
-      pointerInsideDisplayRef.current = true;
-      focusRemoteInput();
-    };
-    const releaseRemoteInput = (event: MouseEvent) => {
-      rememberClientPointer(event.clientX, event.clientY);
-      pointerInsideDisplayRef.current = false;
-      clearRemoteInputFocus(false);
-    };
-
-    listen("mouseenter", claimRemoteInput);
-    listen("mousemove", claimRemoteInput);
-    listen("mousedown", claimRemoteInput);
-    listen("mouseleave", releaseRemoteInput);
+    listen("mousedown", handleDisplayPointerStart);
+    listen("touchstart", handleDisplayPointerStart, { passive: true });
 
     inputCleanupRef.current?.();
     inputCleanupRef.current = () => {
@@ -726,8 +628,7 @@ export const GuacamoleDisplay = forwardRef<
           isConnectingRef.current = false;
           setIsReady(false);
           setHasError(true);
-          pointerInsideDisplayRef.current = false;
-          clearRemoteInputFocus(false);
+          clearRemoteInputFocus();
           onError?.(t("guacamole.connectionError"));
           onDisconnect?.();
           break;
@@ -741,8 +642,7 @@ export const GuacamoleDisplay = forwardRef<
       setIsReady(false);
       setHasError(true);
       isConnectingRef.current = false;
-      pointerInsideDisplayRef.current = false;
-      clearRemoteInputFocus(false);
+      clearRemoteInputFocus();
       onError?.(errorMessage);
     };
 
@@ -815,7 +715,6 @@ export const GuacamoleDisplay = forwardRef<
     disconnectClient,
     clearRemoteInputFocus,
     focusRemoteInput,
-    reconcileInput,
     connectionConfig.protocol,
     connectionConfig.type,
     connectionConfig.dpi,
@@ -833,72 +732,45 @@ export const GuacamoleDisplay = forwardRef<
 
   useEffect(() => {
     if (!isVisible) {
-      pointerInsideDisplayRef.current = false;
-      clearRemoteInputFocus(false);
+      clearRemoteInputFocus();
       return;
     }
 
-    reconcileInput();
-  }, [isVisible, clearRemoteInputFocus, reconcileInput]);
+    refreshKeyboardHandlers();
+  }, [isVisible, clearRemoteInputFocus, refreshKeyboardHandlers]);
 
   useEffect(() => {
-    const rememberRemoteOwnership = () => {
-      restoreInputFocusOnWindowFocusRef.current =
-        restoreInputFocusOnWindowFocusRef.current ||
-        (isVisibleRef.current &&
-          (hasKeyboardFocusRef.current || pointerInsideDisplayRef.current));
-    };
-
-    const updateGlobalPointer = (clientX: number, clientY: number) => {
-      lastClientPointerRef.current = {
-        x: clientX,
-        y: clientY,
-        hasPosition: true,
-      };
-    };
-
-    const handleGlobalMouse = (event: MouseEvent) => {
-      updateGlobalPointer(event.clientX, event.clientY);
-      reconcileInput();
-    };
-
     const handleWindowFocus = () => {
       windowFocusedRef.current = true;
-      reconcileInput();
+      refreshKeyboardHandlers();
     };
 
     const handleWindowBlur = () => {
-      rememberRemoteOwnership();
       windowFocusedRef.current = false;
-      clearRemoteInputFocus(true);
+      clearRemoteInputFocus();
     };
 
     const handleVisibilityChange = () => {
       windowFocusedRef.current =
         document.visibilityState === "visible" && document.hasFocus();
       if (document.visibilityState !== "visible") {
-        rememberRemoteOwnership();
-        clearRemoteInputFocus(true);
+        clearRemoteInputFocus();
         return;
       }
 
-      reconcileInput();
+      refreshKeyboardHandlers();
     };
 
     window.addEventListener("focus", handleWindowFocus);
     window.addEventListener("blur", handleWindowBlur);
     document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener("mousemove", handleGlobalMouse, true);
-    window.addEventListener("mousedown", handleGlobalMouse, true);
 
     return () => {
       window.removeEventListener("focus", handleWindowFocus);
       window.removeEventListener("blur", handleWindowBlur);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener("mousemove", handleGlobalMouse, true);
-      window.removeEventListener("mousedown", handleGlobalMouse, true);
     };
-  }, [clearRemoteInputFocus, reconcileInput]);
+  }, [clearRemoteInputFocus, refreshKeyboardHandlers]);
 
   useEffect(() => {
     return () => {
@@ -931,7 +803,6 @@ export const GuacamoleDisplay = forwardRef<
           if (rect.width > 0 && rect.height > 0) {
             clientRef.current.sendSize(size.width, size.height);
             rescaleDisplay(true);
-            reconcileInput();
           }
         }
       }, 150);
@@ -947,7 +818,6 @@ export const GuacamoleDisplay = forwardRef<
     connectionConfig.protocol,
     connectionConfig.type,
     rescaleDisplay,
-    reconcileInput,
   ]);
 
   const syncClipboard = useCallback(() => {
@@ -971,18 +841,6 @@ export const GuacamoleDisplay = forwardRef<
       syncClipboard();
     }
   }, [isVisible, isReady, syncClipboard]);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container || !isReady) return;
-
-    const handleFocus = () => syncClipboard();
-    container.addEventListener("mouseenter", handleFocus);
-
-    return () => {
-      container.removeEventListener("mouseenter", handleFocus);
-    };
-  }, [isReady, syncClipboard]);
 
   const connectingMessage = t("guacamole.connecting", {
     type: (
