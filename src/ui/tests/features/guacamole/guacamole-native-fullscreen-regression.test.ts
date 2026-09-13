@@ -16,14 +16,16 @@ const displaySource = readFileSync(
 );
 
 describe("Guacamole native fullscreen regression guards", () => {
-  it("requests fullscreen on the RDP container instead of the whole app", () => {
+  it("keeps the Guacamole mouse target out of the browser fullscreen top layer", () => {
     expect(appSource).toContain("fullscreenContainerRef");
     expect(appSource).toContain(
-      'await container.requestFullscreen({ navigationUI: "hide" });',
+      "await document.documentElement.requestFullscreen({",
     );
+    expect(appSource).not.toContain("await container.requestFullscreen");
     expect(appSource).toContain(
       'document.addEventListener("fullscreenchange", handleFullscreenChange);',
     );
+    expect(appSource).toContain('? "fixed inset-0 z-[999] w-screen h-screen"');
   });
 
   it("never traps local OS/browser switching while fullscreen", () => {
@@ -42,18 +44,27 @@ describe("Guacamole native fullscreen regression guards", () => {
     expect(toolbarSource).toContain('t("guacamole.toolbar.exitFullscreen")');
   });
 
-  it("refreshes viewport geometry after fullscreen without changing mouse ownership", () => {
-    const fullscreenHandler = appSource.slice(
-      appSource.indexOf("const handleFullscreenChange"),
-      appSource.indexOf('document.addEventListener("fullscreenchange"'),
+  it("restores the RDP overlay when fullscreen exits through ESC or browser UI", () => {
+    expect(appSource).toContain("rdpFullscreenActiveRef");
+    expect(appSource).toContain("rdpOwnsDocumentFullscreenRef");
+    expect(appSource).toContain(
+      "rdpFullscreenActiveRef.current && !document.fullscreenElement",
     );
+    expect(appSource).toContain("setIsNativeFullscreen(false)");
+  });
 
-    expect(fullscreenHandler).toContain("if (!isVisible) return;");
-    expect(fullscreenHandler).toContain(
-      "displayRef.current?.refreshViewport()",
+  it("refreshes viewport after the fixed/fullscreen layout changes without changing mouse ownership", () => {
+    const layoutEffectStart = appSource.indexOf("useLayoutEffect(() => {");
+    const layoutEffectEnd = appSource.indexOf(
+      "  useEffect(() => {\n    if (!tabId)",
+      layoutEffectStart,
     );
-    expect(fullscreenHandler).toContain("requestAnimationFrame");
-    expect(fullscreenHandler).toContain("window.setTimeout");
+    const layoutEffect = appSource.slice(layoutEffectStart, layoutEffectEnd);
+
+    expect(layoutEffect).toContain("displayRef.current?.refreshViewport()");
+    expect(layoutEffect).toContain("requestAnimationFrame");
+    expect(layoutEffect).toContain("window.setTimeout");
+    expect(layoutEffect).toContain("[isNativeFullscreen, isVisible]");
     expect(displaySource).toContain("refreshViewport: () => void;");
     expect(displaySource).toContain(
       "client.sendSize(size.width, size.height);",
