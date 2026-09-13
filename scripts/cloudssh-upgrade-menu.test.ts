@@ -90,7 +90,7 @@ describe("CloudSSH 升级/回滚菜单", () => {
     expect(script).not.toContain("docker volume prune");
   });
 
-  it("提供直接升级、状态查看和可选择回滚菜单", async () => {
+  it("提供升级、回滚、删除回滚点和脚本自升级菜单", async () => {
     const script = await readFile(scriptPath, "utf8");
 
     expect(script).toContain("1) 立即升级到最新版本");
@@ -98,8 +98,15 @@ describe("CloudSSH 升级/回滚菜单", () => {
     expect(script).toContain("3) 回滚到最近一次升级前版本");
     expect(script).toContain("4) 选择历史回滚点");
     expect(script).toContain("5) 查看所有回滚点");
+    expect(script).toContain("6) 删除历史回滚点");
+    expect(script).toContain("7) 在线升级本管理脚本");
     expect(script).toContain("--upgrade) upgrade_latest");
     expect(script).toContain("--rollback) rollback_latest");
+    expect(script).toContain("--delete-rollback) delete_restore_select");
+    expect(script).toContain("--self-update) self_update");
+    expect(script).toContain(
+      "https://raw.githubusercontent.com/hwyc888/cloudssh/main/scripts/cloudssh-upgrade-menu.sh",
+    );
   });
 
   it("通过 bash 语法检查", () => {
@@ -111,6 +118,196 @@ describe("CloudSSH 升级/回滚菜单", () => {
       encoding: "utf8",
     });
     expect(result.status, result.stderr || result.stdout).toBe(0);
+  });
+
+  it("可在线升级管理脚本，并保留 previous 备份", async () => {
+    const bash = bashExecutable();
+    if (!bash) return;
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "cloudssh-self-update-"));
+    try {
+      const mockBin = path.join(root, "mock-bin");
+      await mkdir(mockBin, { recursive: true });
+
+      const source = await readFile(scriptPath, "utf8");
+      const currentScript = path.join(root, "cloudssh-upgrade-menu.sh");
+      const remoteScript = path.join(root, "remote-cloudssh-upgrade-menu.sh");
+      await writeFile(
+        currentScript,
+        source.replace('SCRIPT_VERSION="1.1.0"', 'SCRIPT_VERSION="1.0.0"'),
+      );
+      await writeFile(
+        remoteScript,
+        source.replace('SCRIPT_VERSION="1.1.0"', 'SCRIPT_VERSION="1.2.0"'),
+      );
+      await makeExecutable(currentScript);
+
+      const curlMock = path.join(mockBin, "curl");
+      await writeFile(
+        curlMock,
+        `#!/usr/bin/env bash
+set -euo pipefail
+out=''
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+cp "$MOCK_REMOTE_SCRIPT" "$out"
+`,
+      );
+      await makeExecutable(curlMock);
+
+      const result = spawnSync(
+        bash,
+        [toShellPath(currentScript), "--self-update"],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${toShellPath(mockBin)}:${process.env.PATH ?? ""}`,
+            MOCK_REMOTE_SCRIPT: toShellPath(remoteScript),
+            CLOUDSSH_UPGRADE_SCRIPT_URL: `file://${toShellPath(remoteScript)}`,
+          },
+          timeout: 10_000,
+        },
+      );
+
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(result.stdout).toContain("管理脚本升级完成：1.0.0 -> 1.2.0");
+      expect(await readFile(currentScript, "utf8")).toContain(
+        'SCRIPT_VERSION="1.2.0"',
+      );
+      expect(await readFile(`${currentScript}.previous`, "utf8")).toContain(
+        'SCRIPT_VERSION="1.0.0"',
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("可删除历史回滚点，但拒绝删除当前配置正在使用的回滚镜像", async () => {
+    const bash = bashExecutable();
+    if (!bash) return;
+
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "cloudssh-delete-rollback-"),
+    );
+    try {
+      const installDir = path.join(root, "cloudssh");
+      const mockBin = path.join(root, "mock-bin");
+      const backupRoot = path.join(root, "upgrade-backups");
+      const logPath = path.join(root, "docker.log");
+      await Promise.all([
+        mkdir(path.join(installDir, "docker"), { recursive: true }),
+        mkdir(mockBin, { recursive: true }),
+        mkdir(backupRoot, { recursive: true }),
+      ]);
+
+      const envPath = path.join(installDir, ".env");
+      await writeFile(
+        envPath,
+        "CLOUDSSH_IMAGE=ghcr.io/hwyc888/cloudssh:latest\nCLOUDSSH_HTTP_PORT=2244\n",
+      );
+      await writeFile(
+        path.join(installDir, "docker", "docker-compose.cloudssh.yml"),
+        "services:\n  cloudssh: {}\n",
+      );
+
+      const rollbackDir = path.join(backupRoot, "20260913-190000-100");
+      await mkdir(rollbackDir, { recursive: true });
+      await writeFile(
+        path.join(rollbackDir, "metadata.env"),
+        [
+          "CREATED_AT=20260913-190000",
+          "ROLLBACK_TAG=cloudssh-termix:rollback-20260913-190000-100",
+          "PREVIOUS_VERSION=2.6.0-cloudssh.58",
+          "",
+        ].join("\n"),
+      );
+      await writeFile(
+        path.join(rollbackDir, "env"),
+        "CLOUDSSH_HTTP_PORT=2244\n",
+      );
+
+      const dockerMock = path.join(mockBin, "docker");
+      await writeFile(
+        dockerMock,
+        `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$MOCK_LOG"
+case "\${1:-}" in
+  info) exit 0 ;;
+  compose)
+    [[ "\${2:-}" == 'version' ]] && exit 0
+    exit 0
+    ;;
+  image)
+    case "\${2:-}" in
+      inspect) exit 0 ;;
+      rm) exit 0 ;;
+    esac
+    ;;
+esac
+exit 0
+`,
+      );
+      await makeExecutable(dockerMock);
+
+      const sharedEnv = {
+        ...process.env,
+        PATH: `${toShellPath(mockBin)}:${process.env.PATH ?? ""}`,
+        CLOUDSSH_INSTALL_DIR: toShellPath(installDir),
+        CLOUDSSH_UPGRADE_BACKUP_DIR: toShellPath(backupRoot),
+        MOCK_LOG: toShellPath(logPath),
+      };
+
+      const deleted = spawnSync(bash, [scriptPath, "--delete-rollback"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        input: "1\ny\n",
+        env: sharedEnv,
+        timeout: 10_000,
+      });
+      expect(deleted.status, deleted.stderr || deleted.stdout).toBe(0);
+      expect(deleted.stdout).toContain("历史回滚点已删除");
+      expect(existsSync(rollbackDir)).toBe(false);
+      expect(await readFile(logPath, "utf8")).toContain(
+        "image rm cloudssh-termix:rollback-20260913-190000-100",
+      );
+
+      const activeDir = path.join(backupRoot, "20260913-193000-200");
+      const activeTag = "cloudssh-termix:rollback-20260913-193000-200";
+      await mkdir(activeDir, { recursive: true });
+      await writeFile(
+        path.join(activeDir, "metadata.env"),
+        `CREATED_AT=20260913-193000\nROLLBACK_TAG=${activeTag}\nPREVIOUS_VERSION=2.6.0-cloudssh.59\n`,
+      );
+      await writeFile(path.join(activeDir, "env"), "CLOUDSSH_HTTP_PORT=2244\n");
+      await writeFile(
+        envPath,
+        `CLOUDSSH_IMAGE=${activeTag}\nCLOUDSSH_HTTP_PORT=2244\n`,
+      );
+
+      const protectedResult = spawnSync(
+        bash,
+        [scriptPath, "--delete-rollback"],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          input: "1\ny\n",
+          env: sharedEnv,
+          timeout: 10_000,
+        },
+      );
+      expect(protectedResult.status).toBe(1);
+      expect(protectedResult.stderr).toContain("仍被当前运行配置使用");
+      expect(existsSync(activeDir)).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("模拟升级和回滚时保持 2244、CORS 和两个命名卷", async () => {
