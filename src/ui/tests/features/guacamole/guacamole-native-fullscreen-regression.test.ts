@@ -26,11 +26,13 @@ describe("Guacamole native fullscreen regression guards", () => {
     );
   });
 
-  it("uses best-effort keyboard lock and releases it on fullscreen exit", () => {
-    expect(appSource).toContain('"AltLeft"');
-    expect(appSource).toContain('"MetaLeft"');
-    expect(appSource).toContain('"Tab"');
-    expect(appSource).toContain("if (!isFullscreen) unlockKeyboard();");
+  it("never traps local OS/browser switching while fullscreen", () => {
+    expect(appSource).not.toContain("KeyboardLockNavigator");
+    expect(appSource).not.toContain("keyboard?.lock");
+    expect(appSource).not.toContain("requestPointerLock");
+    expect(appSource).toContain(
+      "The local OS and\n      // browser must always remain reachable",
+    );
   });
 
   it("exposes the true fullscreen control only for RDP", () => {
@@ -40,17 +42,18 @@ describe("Guacamole native fullscreen regression guards", () => {
     expect(toolbarSource).toContain('t("guacamole.toolbar.exitFullscreen")');
   });
 
-  it("restores input focus only for the visible RDP after any fullscreen transition", () => {
+  it("reconciles pointer ownership after entering or leaving fullscreen", () => {
     const fullscreenHandler = appSource.slice(
       appSource.indexOf("const handleFullscreenChange"),
       appSource.indexOf('document.addEventListener("fullscreenchange"'),
     );
 
-    expect(fullscreenHandler).toContain("if (isVisible)");
-    expect(fullscreenHandler).toContain("displayRef.current?.focus()");
-    expect(displaySource).toContain("focus: () => {");
-    expect(displaySource).toContain("hasKeyboardFocusRef.current = true;");
-    expect(displaySource).toContain("refreshKeyboardHandlers();");
+    expect(fullscreenHandler).toContain("if (!isVisible) return;");
+    expect(fullscreenHandler).toContain("displayRef.current?.reconcileInput()");
+    expect(fullscreenHandler).toContain("requestAnimationFrame");
+    expect(fullscreenHandler).toContain("window.setTimeout");
+    expect(displaySource).toContain("reconcileInput: () => void;");
+    expect(displaySource).toContain("document.elementFromPoint");
   });
 
   it("keeps remote resolution synchronized when the fullscreen container resizes", () => {

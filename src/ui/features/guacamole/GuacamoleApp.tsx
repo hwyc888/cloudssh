@@ -124,13 +124,6 @@ interface GuacamoleAppInnerProps {
   isVisible: boolean;
 }
 
-type KeyboardLockNavigator = Navigator & {
-  keyboard?: {
-    lock?: (keyCodes?: string[]) => Promise<void>;
-    unlock?: () => void;
-  };
-};
-
 const GuacamoleAppInner = React.forwardRef<
   GuacamoleAppHandle,
   GuacamoleAppInnerProps
@@ -252,10 +245,6 @@ const GuacamoleAppInner = React.forwardRef<
     setRetryCount((c) => c + 1);
   }, [needsCredentialPrompt]);
 
-  const unlockKeyboard = useCallback(() => {
-    (navigator as KeyboardLockNavigator).keyboard?.unlock?.();
-  }, []);
-
   const toggleNativeFullscreen = useCallback(async () => {
     const container = fullscreenContainerRef.current;
     if (!container) return;
@@ -271,41 +260,41 @@ const GuacamoleAppInner = React.forwardRef<
         return;
       }
 
+      // Deliberately avoid Keyboard Lock / Pointer Lock here. The local OS and
+      // browser must always remain reachable while an RDP session is open.
       await container.requestFullscreen({ navigationUI: "hide" });
-
-      try {
-        await (navigator as KeyboardLockNavigator).keyboard?.lock?.([
-          "AltLeft",
-          "AltRight",
-          "MetaLeft",
-          "MetaRight",
-          "Tab",
-        ]);
-      } catch {
-        // Keyboard Lock is optional and not supported by every browser.
-      }
     } catch {
       toast.error(t("guacamole.fullscreenFailed"));
     }
   }, [t]);
 
   useEffect(() => {
+    let reconcileFrame = 0;
+    let reconcileTimer = 0;
+
     const handleFullscreenChange = () => {
       const isFullscreen =
         document.fullscreenElement === fullscreenContainerRef.current;
       setIsNativeFullscreen(isFullscreen);
-      if (!isFullscreen) unlockKeyboard();
-      if (isVisible) {
-        requestAnimationFrame(() => displayRef.current?.focus());
-      }
+      if (!isVisible) return;
+
+      cancelAnimationFrame(reconcileFrame);
+      window.clearTimeout(reconcileTimer);
+      reconcileFrame = requestAnimationFrame(() => {
+        displayRef.current?.reconcileInput();
+      });
+      reconcileTimer = window.setTimeout(() => {
+        displayRef.current?.reconcileInput();
+      }, 180);
     };
 
     document.addEventListener("fullscreenchange", handleFullscreenChange);
     return () => {
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
-      unlockKeyboard();
+      cancelAnimationFrame(reconcileFrame);
+      window.clearTimeout(reconcileTimer);
     };
-  }, [isVisible, unlockKeyboard]);
+  }, [isVisible]);
 
   useEffect(() => {
     if (!tabId) return;
