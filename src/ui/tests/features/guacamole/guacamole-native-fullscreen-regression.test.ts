@@ -74,6 +74,24 @@ describe("Guacamole native fullscreen regression guards", () => {
     expect(displaySource).not.toContain("document.elementFromPoint");
   });
 
+  it("restores RDP input only when fullscreen returns to the normal window", () => {
+    const layoutEffectStart = appSource.indexOf("useLayoutEffect(() => {");
+    const layoutEffectEnd = appSource.indexOf(
+      "  useEffect(() => {\n    if (!tabId)",
+      layoutEffectStart,
+    );
+    const layoutEffect = appSource.slice(layoutEffectStart, layoutEffectEnd);
+
+    expect(layoutEffect).toContain(
+      "previousNativeFullscreenRef.current && !isNativeFullscreen",
+    );
+    expect(layoutEffect).toContain("displayRef.current?.restoreInput()");
+    expect(displaySource).toContain("restoreInput: () => void;");
+    expect(displaySource).toContain("restoreInputOnWindowFocusRef");
+    expect(displaySource).toContain("focusRemoteInput();");
+    expect(displaySource).not.toContain("document.elementFromPoint");
+  });
+
   it("keeps remote resolution synchronized when the fullscreen container resizes", () => {
     expect(displaySource).toContain(
       "const resizeObserver = new ResizeObserver",
