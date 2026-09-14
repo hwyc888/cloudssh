@@ -44,6 +44,7 @@ export interface GuacamoleDisplayHandle {
   disconnect: () => void;
   isConnected: () => boolean;
   refreshViewport: () => void;
+  restoreInput: () => void;
   sendKey: (keysym: number, pressed: boolean) => void;
   sendMouse: (x: number, y: number, buttonMask: number) => void;
   setClipboard: (data: string) => void;
@@ -82,6 +83,7 @@ export const GuacamoleDisplay = forwardRef<
   const resizeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const inputCleanupRef = useRef<(() => void) | null>(null);
   const hasKeyboardFocusRef = useRef(false);
+  const restoreInputOnWindowFocusRef = useRef(false);
   const windowFocusedRef = useRef(
     typeof document === "undefined" ? true : document.hasFocus(),
   );
@@ -137,6 +139,7 @@ export const GuacamoleDisplay = forwardRef<
     releaseRemoteKeys();
     keyboardRef.current = null;
     hasKeyboardFocusRef.current = false;
+    restoreInputOnWindowFocusRef.current = false;
 
     clientRef.current = null;
     displayElementRef.current = null;
@@ -293,6 +296,30 @@ export const GuacamoleDisplay = forwardRef<
     refreshKeyboardHandlers();
   }, [refreshKeyboardHandlers]);
 
+  const restoreRemoteInput = useCallback(() => {
+    if (
+      !displayElementRef.current ||
+      !clientRef.current ||
+      !isVisibleRef.current
+    ) {
+      restoreInputOnWindowFocusRef.current = false;
+      return;
+    }
+
+    // Native fullscreen restore can briefly complete before Electron/the
+    // browser returns focus to the document. Remember this one recovery
+    // request and finish it on the next window focus event instead of
+    // globally tracking mouse ownership.
+    restoreInputOnWindowFocusRef.current = true;
+    const windowFocused =
+      document.visibilityState === "visible" && document.hasFocus();
+    windowFocusedRef.current = windowFocused;
+    if (!windowFocused) return;
+
+    restoreInputOnWindowFocusRef.current = false;
+    focusRemoteInput();
+  }, [focusRemoteInput]);
+
   const clearRemoteInputFocus = useCallback(() => {
     const hadRemoteFocus = hasKeyboardFocusRef.current;
     hasKeyboardFocusRef.current = false;
@@ -356,6 +383,7 @@ export const GuacamoleDisplay = forwardRef<
     disconnect: disconnectClient,
     isConnected: () => isReady && !hasError,
     refreshViewport,
+    restoreInput: restoreRemoteInput,
     sendKey: (keysym: number, pressed: boolean) => {
       if (clientRef.current) {
         clientRef.current.sendKeyEvent(pressed ? 1 : 0, keysym);
@@ -564,6 +592,7 @@ export const GuacamoleDisplay = forwardRef<
     };
 
     const handleDisplayPointerStart = () => {
+      restoreInputOnWindowFocusRef.current = false;
       focusRemoteInput();
     };
 
@@ -742,6 +771,11 @@ export const GuacamoleDisplay = forwardRef<
   useEffect(() => {
     const handleWindowFocus = () => {
       windowFocusedRef.current = true;
+      if (restoreInputOnWindowFocusRef.current) {
+        restoreInputOnWindowFocusRef.current = false;
+        focusRemoteInput();
+        return;
+      }
       refreshKeyboardHandlers();
     };
 
@@ -758,6 +792,15 @@ export const GuacamoleDisplay = forwardRef<
         return;
       }
 
+      if (
+        windowFocusedRef.current &&
+        restoreInputOnWindowFocusRef.current
+      ) {
+        restoreInputOnWindowFocusRef.current = false;
+        focusRemoteInput();
+        return;
+      }
+
       refreshKeyboardHandlers();
     };
 
@@ -770,7 +813,7 @@ export const GuacamoleDisplay = forwardRef<
       window.removeEventListener("blur", handleWindowBlur);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [clearRemoteInputFocus, refreshKeyboardHandlers]);
+  }, [clearRemoteInputFocus, focusRemoteInput, refreshKeyboardHandlers]);
 
   useEffect(() => {
     return () => {

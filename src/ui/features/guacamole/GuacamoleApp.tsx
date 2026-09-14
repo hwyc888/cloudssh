@@ -152,6 +152,7 @@ const GuacamoleAppInner = React.forwardRef<
   const [isNativeFullscreen, setIsNativeFullscreen] = useState(false);
   const rdpFullscreenActiveRef = useRef(false);
   const rdpOwnsDocumentFullscreenRef = useRef(false);
+  const previousNativeFullscreenRef = useRef(false);
 
   const resolvedProtocolForConnect = (protocol ??
     hostConfig.connectionType ??
@@ -318,13 +319,24 @@ const GuacamoleAppInner = React.forwardRef<
   useLayoutEffect(() => {
     if (!isVisible) return;
 
+    const restoredFromFullscreen =
+      previousNativeFullscreenRef.current && !isNativeFullscreen;
+    previousNativeFullscreenRef.current = isNativeFullscreen;
+
     // Refresh only after React has applied the fixed/normal layout. A second
-    // pass covers the asynchronous RDP resize without changing mouse bindings.
-    const refreshFrame = requestAnimationFrame(() => {
+    // pass covers the asynchronous RDP resize. When leaving fullscreen, also
+    // restore input once the normal-window DOM/focus state has settled.
+    const refreshAfterLayout = () => {
       displayRef.current?.refreshViewport();
+      if (restoredFromFullscreen) {
+        displayRef.current?.restoreInput();
+      }
+    };
+    const refreshFrame = requestAnimationFrame(() => {
+      refreshAfterLayout();
     });
     const refreshTimer = window.setTimeout(() => {
-      displayRef.current?.refreshViewport();
+      refreshAfterLayout();
     }, 180);
 
     return () => {
